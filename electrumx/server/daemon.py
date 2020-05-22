@@ -258,6 +258,14 @@ class Daemon(object):
         # Cast to int because some coin daemons are old and require it
         return await self._send_single('getrawtransaction',
                                        (hex_hash, int(verbose)))
+    
+    async def listproposals(self, filter):
+        return await self._send_single('listproposals',
+                                       (filter))
+    
+    async def listconsultations(self, filter):
+        return await self._send_single('listconsultations',
+                                       (filter))
 
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
