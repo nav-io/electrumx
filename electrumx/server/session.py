@@ -1011,8 +1011,8 @@ class ElectrumX(SessionBase):
         return self.session_mgr.hsub_results
     
     async def subscribe_dao_result(self):
-        proposals = await self.listproposals()
-        consultations = await self.consultations()
+        proposals = await self.listproposals("")
+        consultations = await self.consultations("")
         return {'p':proposals,'c':consultations}
 
     async def headers_subscribe(self):
@@ -1216,11 +1216,11 @@ class ElectrumX(SessionBase):
             return False
         return self.remote_address().host == proxy_address.host
     
-    async def listproposals(self, filter):
+    async def listproposals(self, filter=""):
         res = await self.daemon_request('listproposals', filter)
         return res
 
-    async def listconsultations(self, filter):
+    async def listconsultations(self, filter=""):
         res = await self.daemon_request('listconsultations', filter)
         return res
     
