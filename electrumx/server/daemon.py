@@ -266,6 +266,9 @@ class Daemon(object):
     async def listconsultations(self, filter):
         return await self._send_single('listconsultations',
                                        (filter))
+    
+    async def getcfunddbstatehash(self):
+        return await self._send_single('getcfunddbstatehash')
 
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
