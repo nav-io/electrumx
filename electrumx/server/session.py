@@ -1193,7 +1193,19 @@ class ElectrumX(SessionBase):
         if not proxy_address:
             return False
         return self.remote_address().host == proxy_address.host
+    
+    async def listproposals(self, filter):
+        res = await self.daemon_request('listproposals', filter)
+        return res
 
+    async def listconsultations(self, filter):
+        res = await self.daemon_request('listconsultations', filter)
+        return res
+    
+    async def getcfunddbstatehash(self):
+        res = await self.daemon_request('getcfunddbstatehash')
+        return res
+    
     async def replaced_banner(self, banner):
         network_info = await self.daemon_request('getnetworkinfo')
         ni_version = network_info['version']
@@ -1410,6 +1422,9 @@ class ElectrumX(SessionBase):
             'blockchain.transaction.get': self.transaction_get,
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
+            'blockchain.listproposals': self.listproposals,
+            'blockchain.listconsultations': self.listconsultations,
+            'blockchain.getcfunddbstatehash': self.getcfunddbstatehash,
             'mempool.get_fee_histogram': self.mempool.compact_fee_histogram,
             'server.add_peer': self.add_peer,
             'server.banner': self.banner,
