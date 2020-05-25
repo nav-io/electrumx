@@ -138,6 +138,7 @@ class SessionManager:
         self._merkle_lookups = 0
         self._merkle_hits = 0
         self.notified_height = None
+        self.last_dao_statehash = None
         self.hsub_results = None
         self._task_group = TaskGroup()
         self._sslc = None
@@ -761,7 +762,7 @@ class SessionManager:
         '''Notify sessions about height changes and touched addresses.'''
         height_changed = height != self.notified_height
         statehash = await self.getcfunddbstatehash()
-        dao_changed = statehash != self.last_dao_statehash:
+        dao_changed = statehash != self.last_dao_statehash
 
         if height_changed:
             await self._refresh_hsub_results(height)
@@ -769,6 +770,9 @@ class SessionManager:
             cache = self._history_cache
             for hashX in set(cache).intersection(touched):
                 del cache[hashX]
+                
+        if dao_changed:
+            self.last_dao_statehash = statehash
 
         for session in self.sessions:
             await self._task_group.spawn(session.notify, touched, height_changed, dao_changed)
@@ -907,7 +911,6 @@ class ElectrumX(SessionBase):
         super().__init__(*args, **kwargs)
         self.subscribe_headers = False
         self.subscribe_dao = False
-        self.last_dao_statehash = ""
         self.connection.max_response_size = self.env.max_send
         self.hashX_subs = {}
         self.sv_seen = False
