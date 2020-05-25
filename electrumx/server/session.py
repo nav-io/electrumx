@@ -1432,7 +1432,7 @@ class ElectrumX(SessionBase):
             'blockchain.block.headers': self.block_headers,
             'blockchain.estimatefee': self.estimatefee,
             'blockchain.headers.subscribe': self.headers_subscribe,
-            'blockchain.dao.subscribe': self.headers_subscribe,
+            'blockchain.dao.subscribe': self.dao_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
