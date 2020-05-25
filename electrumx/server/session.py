@@ -138,7 +138,6 @@ class SessionManager:
         self._merkle_lookups = 0
         self._merkle_hits = 0
         self.notified_height = None
-        self.last_dao_statehash = None
         self.hsub_results = None
         self._task_group = TaskGroup()
         self._sslc = None
@@ -761,8 +760,6 @@ class SessionManager:
     async def _notify_sessions(self, height, touched):
         '''Notify sessions about height changes and touched addresses.'''
         height_changed = height != self.notified_height
-        statehash = await self.getcfunddbstatehash()
-        dao_changed = statehash != self.last_dao_statehash
 
         if height_changed:
             await self._refresh_hsub_results(height)
@@ -770,12 +767,9 @@ class SessionManager:
             cache = self._history_cache
             for hashX in set(cache).intersection(touched):
                 del cache[hashX]
-                
-        if dao_changed:
-            self.last_dao_statehash = statehash
 
         for session in self.sessions:
-            await self._task_group.spawn(session.notify, touched, height_changed, dao_changed)
+            await self._task_group.spawn(session.notify, touched, height_changed)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
@@ -911,6 +905,7 @@ class ElectrumX(SessionBase):
         super().__init__(*args, **kwargs)
         self.subscribe_headers = False
         self.subscribe_dao = False
+        self.last_dao_statehash = None
         self.connection.max_response_size = self.env.max_send
         self.hashX_subs = {}
         self.sv_seen = False
@@ -967,7 +962,7 @@ class ElectrumX(SessionBase):
         self.mempool_statuses.pop(hashX, None)
         return self.hashX_subs.pop(hashX, None)
 
-    async def notify(self, touched, height_changed, dao_changed):
+    async def notify(self, touched, height_changed):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
         '''
@@ -975,9 +970,13 @@ class ElectrumX(SessionBase):
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
             
-        if dao_changed and self.subscribe_dao:
-            args = (await self.subscribe_dao_result(), )
-            await self.send_notification('blockchain.dao.subscribe', args)
+        if self.subscribe_dao:
+            statehash = await self.getcfunddbstatehash()
+            dao_changed = statehash != self.last_dao_statehash            
+            if dao_changed:
+                args = (await self.subscribe_dao_result(), )
+                await self.send_notification('blockchain.dao.subscribe', args)
+                self.last_dao_statehash = statehash
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
