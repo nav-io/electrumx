@@ -1012,7 +1012,7 @@ class ElectrumX(SessionBase):
     
     async def subscribe_dao_result(self):
         proposals = await self.listproposals("")
-        consultations = await self.consultations("")
+        consultations = await self.listconsultations("")
         return {'p':proposals,'c':consultations}
 
     async def headers_subscribe(self):
