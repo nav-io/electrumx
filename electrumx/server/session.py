@@ -903,6 +903,8 @@ class ElectrumX(SessionBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.subscribe_headers = False
+        self.subscribe_dao = False
+        self.last_dao_statehash = ""
         self.connection.max_response_size = self.env.max_send
         self.hashX_subs = {}
         self.sv_seen = False
@@ -966,6 +968,12 @@ class ElectrumX(SessionBase):
         if height_changed and self.subscribe_headers:
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
+            
+        if self.subscribe_dao:
+            statehash = await self.getcfunddbstatehash()
+            if statehash != self.last_dao_statehash:
+                await self.send_notification('blockchain.dao.subscribe', statehash)
+                self.last_dao_statehash = statehash
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
@@ -998,12 +1006,24 @@ class ElectrumX(SessionBase):
     async def subscribe_headers_result(self):
         '''The result of a header subscription or notification.'''
         return self.session_mgr.hsub_results
+    
+    async def subscribe_dao_result(self):
+        statehash = await self.getcfunddbstatehash()
+        if statehash != self.last_dao_statehash:
+            await self.send_notification('blockchain.dao.subscribe', statehash)
+            self.last_dao_statehash = statehash
 
     async def headers_subscribe(self):
         '''Subscribe to get raw headers of new blocks.'''
         self.subscribe_headers = True
         self.bump_cost(0.25)
         return await self.subscribe_headers_result()
+    
+    async def dao_subscribe(self):
+        '''Subscribe to get updates about the dao.'''
+        self.subscribe_dao = True
+        self.bump_cost(0.25)
+        return await self.subscribe_dao_result()
 
     async def add_peer(self, features):
         '''Add a peer (but only if the peer resolves to the source).'''
@@ -1412,6 +1432,7 @@ class ElectrumX(SessionBase):
             'blockchain.block.headers': self.block_headers,
             'blockchain.estimatefee': self.estimatefee,
             'blockchain.headers.subscribe': self.headers_subscribe,
+            'blockchain.dao.subscribe': self.headers_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
