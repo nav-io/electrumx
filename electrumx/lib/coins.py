@@ -3469,6 +3469,31 @@ class Navcoin(Coin):
         else:
             import x13_hash
             return x13_hash.getPoWHash(header)
+          
+    @classmethod
+    def hashX_from_script(cls, script):
+        '''Returns a hashX from a script. Patch for P2PK outputs'''
+        def match(ops, pattern):
+            if len(ops) != len(pattern):
+                return False
+            for op, pop in zip(ops, pattern):
+                if pop != op:
+                    # -1 means 'data push', whose op is an (op, data) tuple
+                    if pop == -1 and isinstance(op, tuple):
+                        continue
+                    return False
+            return True
+
+        ops = []
+        try:
+            ops = Script.get_ops(script)
+        except ScriptError:
+            return
+
+        if match(ops, ScriptPubKey.TO_PUBKEY_OPS):
+            script = ScriptPubKey.P2PKH_script(hash160(ops[0][-1]))
+
+        return sha256(script).digest()[:HASHX_LEN]
 
 
 class Unobtanium(AuxPowMixin, Coin):
