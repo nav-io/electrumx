@@ -138,6 +138,8 @@ class SessionManager:
         self._merkle_lookups = 0
         self._merkle_hits = 0
         self.notified_height = None
+        self.last_dao_statehash = None
+        self.last_consensus = None
         self.hsub_results = None
         self._task_group = TaskGroup()
         self._sslc = None
@@ -768,8 +770,22 @@ class SessionManager:
             for hashX in set(cache).intersection(touched):
                 del cache[hashX]
 
+        consensus = await self.daemon.getconsensusparameters(True)
+        consensus_changed = consensus != self.last_consensus
+        statehash = await self.daemon.getcfunddbstatehash()
+        statehash_changed = statehash != self.last_dao_statehash
+
+        dao = {}
+        if statehash_changed:
+            proposals = await self.daemon.listproposals("")
+            consultations = await self.daemon.listconsultations("")
+            dao = {'p':proposals,'c':consultations}
+
+        self.last_dao_statehash = statehash
+        self.last_consensus = consensus
+
         for session in self.sessions:
-            await self._task_group.spawn(session.notify, touched, height_changed)
+            await self._task_group.spawn(session.notify, touched, height_changed, consensus_changed, consensus, statehash_changed, dao)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
@@ -905,7 +921,7 @@ class ElectrumX(SessionBase):
         super().__init__(*args, **kwargs)
         self.subscribe_headers = False
         self.subscribe_dao = False
-        self.last_dao_statehash = None
+        self.subscribe_consensus = False
         self.connection.max_response_size = self.env.max_send
         self.hashX_subs = {}
         self.sv_seen = False
@@ -962,21 +978,21 @@ class ElectrumX(SessionBase):
         self.mempool_statuses.pop(hashX, None)
         return self.hashX_subs.pop(hashX, None)
 
-    async def notify(self, touched, height_changed):
+    async def notify(self, touched, height_changed, consensus_changed, consensus, statehash_changed, dao):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
         '''
         if height_changed and self.subscribe_headers:
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
-            
-        if self.subscribe_dao:
-            statehash = await self.getcfunddbstatehash()
-            dao_changed = statehash != self.last_dao_statehash            
-            if dao_changed:
-                args = (await self.subscribe_dao_result(), )
-                await self.send_notification('blockchain.dao.subscribe', args)
-                self.last_dao_statehash = statehash
+
+        if consensus_changed and self.subscribe_consensus:
+            args = (consensus, )
+            await self.send_notification('blockchain.consensus.subscribe', args)
+
+        if statehash_changed and self.subscribe_dao:
+            args = (dao, )
+            await self.send_notification('blockchain.dao.subscribe', args)
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
@@ -1009,23 +1025,33 @@ class ElectrumX(SessionBase):
     async def subscribe_headers_result(self):
         '''The result of a header subscription or notification.'''
         return self.session_mgr.hsub_results
-    
+
     async def subscribe_dao_result(self):
         proposals = await self.listproposals("")
         consultations = await self.listconsultations("")
         return {'p':proposals,'c':consultations}
+
+    async def subscribe_consensus_result(self):
+        cp = await self.getconsensusparameters(true)
+        return cp
 
     async def headers_subscribe(self):
         '''Subscribe to get raw headers of new blocks.'''
         self.subscribe_headers = True
         self.bump_cost(0.25)
         return await self.subscribe_headers_result()
-    
+
     async def dao_subscribe(self):
         '''Subscribe to get updates about the dao.'''
         self.subscribe_dao = True
         self.bump_cost(0.25)
         return await self.subscribe_dao_result()
+
+    async def consensus_subscribe(self):
+        '''Subscribe to get updates about the consensus parameters.'''
+        self.subscribe_consensus = True
+        self.bump_cost(0.25)
+        return await self.subscribe_consensus_result()
 
     async def add_peer(self, features):
         '''Add a peer (but only if the peer resolves to the source).'''
@@ -1215,7 +1241,7 @@ class ElectrumX(SessionBase):
         if not proxy_address:
             return False
         return self.remote_address().host == proxy_address.host
-    
+
     async def listproposals(self, filter=""):
         res = await self.daemon_request('listproposals', filter)
         return res
@@ -1223,11 +1249,11 @@ class ElectrumX(SessionBase):
     async def listconsultations(self, filter=""):
         res = await self.daemon_request('listconsultations', filter)
         return res
-    
+
     async def getcfunddbstatehash(self):
         res = await self.daemon_request('getcfunddbstatehash')
         return res
-    
+
     async def replaced_banner(self, banner):
         network_info = await self.daemon_request('getnetworkinfo')
         ni_version = network_info['version']
@@ -1435,6 +1461,7 @@ class ElectrumX(SessionBase):
             'blockchain.estimatefee': self.estimatefee,
             'blockchain.headers.subscribe': self.headers_subscribe,
             'blockchain.dao.subscribe': self.dao_subscribe,
+            'blockchain.consensus.subscribe': self.consensus_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history,
