@@ -986,6 +986,13 @@ class ElectrumX(SessionBase):
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
 
+        if height_changed and len(self.subs_stakerscripts) > 0:
+            for script in self.subs_stakerscripts:
+                votes = await self.getstakervote(script)
+                if (votes != self.subs_stakerscripts[script])
+                    await self.send_notification('blockchain.stakervote.subscribe', ({script:votes}, ))
+                    self.subs_stakerscripts[script] = votes
+
         if consensus_changed and self.subscribe_consensus:
             args = (consensus, )
             await self.send_notification('blockchain.consensus.subscribe', args)
@@ -1032,7 +1039,7 @@ class ElectrumX(SessionBase):
         return {'p':proposals,'c':consultations}
 
     async def subscribe_consensus_result(self):
-        cp = await self.getconsensusparameters(true)
+        cp = await self.getconsensusparameters(True)
         return cp
 
     async def headers_subscribe(self):
@@ -1046,6 +1053,12 @@ class ElectrumX(SessionBase):
         self.subscribe_dao = True
         self.bump_cost(0.25)
         return await self.subscribe_dao_result()
+
+    async def stakervote_subscribe(self, stakerscript):
+        self.bump_cost(0.25)
+        currentvotes = await self.getstakervote(stakerscript)
+        self.subs_stakerscripts[stakerscript] = currentvotes
+        return {stakerscript:currentvotes}
 
     async def consensus_subscribe(self):
         '''Subscribe to get updates about the consensus parameters.'''
@@ -1244,6 +1257,14 @@ class ElectrumX(SessionBase):
 
     async def listproposals(self, filter=""):
         res = await self.daemon_request('listproposals', filter)
+        return res
+
+    async def getconsensusparameters(self, extended=True):
+        res = await self.daemon_request('getconsensusparameters', extended)
+        return res
+
+    async def getstakervote(self, script):
+        res = await self.daemon_request('getstakervote', script)
         return res
 
     async def listconsultations(self, filter=""):
@@ -1461,6 +1482,7 @@ class ElectrumX(SessionBase):
             'blockchain.estimatefee': self.estimatefee,
             'blockchain.headers.subscribe': self.headers_subscribe,
             'blockchain.dao.subscribe': self.dao_subscribe,
+            'blockchain.stakervote.subscribe': self.stakervote_subscribe,
             'blockchain.consensus.subscribe': self.consensus_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
