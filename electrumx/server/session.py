@@ -926,6 +926,7 @@ class ElectrumX(SessionBase):
         self.hashX_subs = {}
         self.sv_seen = False
         self.mempool_statuses = {}
+        self.subs_stakerscripts = {}
         self.set_request_handlers(self.PROTOCOL_MIN)
         self.is_peer = False
         self.cost = 5.0   # Connection cost
@@ -989,8 +990,8 @@ class ElectrumX(SessionBase):
         if height_changed and len(self.subs_stakerscripts) > 0:
             for script in self.subs_stakerscripts:
                 votes = await self.getstakervote(script)
-                if (votes != self.subs_stakerscripts[script])
-                    await self.send_notification('blockchain.stakervote.subscribe', ({script:votes}, ))
+                if (votes != self.subs_stakerscripts[script]):
+                    await self.send_notification('blockchain.stakervote.subscribe', (votes, ))
                     self.subs_stakerscripts[script] = votes
 
         if consensus_changed and self.subscribe_consensus:
@@ -1058,7 +1059,7 @@ class ElectrumX(SessionBase):
         self.bump_cost(0.25)
         currentvotes = await self.getstakervote(stakerscript)
         self.subs_stakerscripts[stakerscript] = currentvotes
-        return {stakerscript:currentvotes}
+        return currentvotes
 
     async def consensus_subscribe(self):
         '''Subscribe to get updates about the consensus parameters.'''
