@@ -139,9 +139,8 @@ class SessionManager:
         self._merkle_hits = 0
         self.notified_height = None
         self.last_dao_statehash = None
-        self.last_proposals = None
-        self.last_prequests = None
-        self.last_consultations = None
+        self.last_proposals = {}
+        self.last_consultations = {}
         self.last_consensus = None
         self.hsub_results = None
         self._task_group = TaskGroup()
@@ -789,7 +788,7 @@ class SessionManager:
             for p in proposals_index:
                 if p not in self.last_proposals:
                     dao.append({"t":"p","r":0,"w":proposals_index[p]})
-                 elif proposals_index[p] != self.last_proposals[p]:
+                elif proposals_index[p] != self.last_proposals[p]:
                     dao.append({"t":"p","r":0,"w":proposals_index[p]})
                     
             for p in self.last_proposals:
