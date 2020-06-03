@@ -123,6 +123,7 @@ class SessionManager:
         self.servers = {}           # service->server
         self.sessions = {}          # session->iterable of its SessionGroups
         self.session_groups = {}    # group name->SessionGroup instance
+        self.dao_complete = []
         self.txs_sent = 0
         self.start_time = time.time()
         self._method_counts = defaultdict(int)
@@ -778,12 +779,16 @@ class SessionManager:
         statehash_changed = statehash != self.last_dao_statehash
 
         dao = []
+        
         if statehash_changed:
+            self.dao_complete = []
+            
             proposals = await self.daemon.listproposals("")
             proposals_index = {}
             
             for p in proposals:
                 proposals_index[p["hash"]] = p
+                self.dao_complete.append({"t":"p","r":0,"w":p})
                 
             for p in proposals_index:
                 if p not in self.last_proposals:
@@ -802,6 +807,7 @@ class SessionManager:
             
             for p in consultations:
                 consultations_index[p["hash"]] = p
+                self.dao_complete.append({"t":"c","r":0,"w":p})
             
             for p in consultations_index:
                 if p not in self.last_consultations:
@@ -819,7 +825,7 @@ class SessionManager:
         self.last_consensus = consensus
 
         for session in self.sessions:
-            await self._task_group.spawn(session.notify, touched, height_changed, consensus_changed, consensus, statehash_changed, dao)
+            await self._task_group.spawn(session.notify, touched, height_changed, consensus_changed, consensus, statehash_changed, dao, self.dao_complete)
 
     def _ip_addr_group_name(self, session):
         host = session.remote_address().host
@@ -961,6 +967,7 @@ class ElectrumX(SessionBase):
         self.sv_seen = False
         self.mempool_statuses = {}
         self.subs_stakerscripts = {}
+        self.just_dao_subscribed = False
         self.set_request_handlers(self.PROTOCOL_MIN)
         self.is_peer = False
         self.cost = 5.0   # Connection cost
@@ -1013,7 +1020,7 @@ class ElectrumX(SessionBase):
         self.mempool_statuses.pop(hashX, None)
         return self.hashX_subs.pop(hashX, None)
 
-    async def notify(self, touched, height_changed, consensus_changed, consensus, statehash_changed, dao):
+    async def notify(self, touched, height_changed, consensus_changed, consensus, statehash_changed, dao, complete_dao):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
         '''
@@ -1033,9 +1040,15 @@ class ElectrumX(SessionBase):
             await self.send_notification('blockchain.consensus.subscribe', args)
 
         if statehash_changed and self.subscribe_dao:
-            for d in dao:
-                args = (d, )
-                await self.send_notification('blockchain.dao.subscribe', args)
+            if self.just_dao_subscribed:
+                for d in complete_dao:
+                    args = (d, )
+                    await self.send_notification('blockchain.dao.subscribe', args)
+                self.just_dao_subscribed = False
+            else:
+                for d in dao:
+                    args = (d, )
+                    await self.send_notification('blockchain.dao.subscribe', args)
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
@@ -1070,6 +1083,7 @@ class ElectrumX(SessionBase):
         return self.session_mgr.hsub_results
 
     async def subscribe_dao_result(self):
+        self.just_dao_subscribed = True
         return {}
 
     async def subscribe_consensus_result(self):
