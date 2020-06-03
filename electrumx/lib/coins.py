@@ -3519,6 +3519,17 @@ class Navcoin(Coin):
             script = ScriptPubKey.P2PKH_script(hash160(ops[0][-1]))
 
         return sha256(script).digest()[:HASHX_LEN]
+      
+      
+class NavcoinTestnet(Navcoin):
+    SHORTNAME = "TNAV"
+    P2PKH_VERBYTE = bytes.fromhex("6F")
+    P2SH_VERBYTES = [bytes.fromhex("C4")]
+    TX_COUNT = 0
+    TX_COUNT_HEIGHT = 1
+    NET = 'testnet'
+    RPC_PORT = 44445
+    GENESIS_HASH = ('0000ca20010727d0fdf6343bc233ac5a5eb44631c89c1722b27c15017dbc2902')
 
 
 class Unobtanium(AuxPowMixin, Coin):
