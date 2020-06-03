@@ -1070,9 +1070,7 @@ class ElectrumX(SessionBase):
         return self.session_mgr.hsub_results
 
     async def subscribe_dao_result(self):
-        proposals = await self.listproposals("")
-        consultations = await self.listconsultations("")
-        return {'p':proposals,'c':consultations}
+        return {}
 
     async def subscribe_consensus_result(self):
         cp = await self.getconsensusparameters(True)
