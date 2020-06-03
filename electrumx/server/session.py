@@ -139,6 +139,9 @@ class SessionManager:
         self._merkle_hits = 0
         self.notified_height = None
         self.last_dao_statehash = None
+        self.last_proposals = None
+        self.last_prequests = None
+        self.last_consultations = None
         self.last_consensus = None
         self.hsub_results = None
         self._task_group = TaskGroup()
@@ -775,12 +778,44 @@ class SessionManager:
         statehash = await self.daemon.getcfunddbstatehash()
         statehash_changed = statehash != self.last_dao_statehash
 
-        dao = {}
+        dao = []
         if statehash_changed:
             proposals = await self.daemon.listproposals("")
+            proposals_index = {}
+            
+            for p in proposals:
+                proposals_index[p["hash"]] = p
+                
+            for p in proposals_index:
+                if p not in self.last_proposals:
+                    dao.append({"t":"p","r":0,"w":proposals_index[p]})
+                 elif proposals_index[p] != self.last_proposals[p]:
+                    dao.append({"t":"p","r":0,"w":proposals_index[p]})
+                    
+            for p in self.last_proposals:
+                if p not in proposals_index:
+                     dao.append({"t":"p","r":1,"w":proposals_index[p]})
+                    
+            self.last_proposals = proposals_index
+            
             consultations = await self.daemon.listconsultations("")
-            dao = {'p':proposals,'c':consultations}
-
+            consultations_index = {}
+            
+            for p in consultations:
+                consultations_index[p["hash"]] = p
+            
+            for p in consultations_index:
+                if p not in self.last_consultations:
+                    dao.append({"t":"c","r":0,"w":consultations_index[p]})
+                elif consultations_index[p] != self.last_consultations[p]:
+                    dao.append({"t":"c","r":0,"w":consultations_index[p]})
+                    
+            for p in self.last_consultations:
+                if p not in consultations_index:
+                     dao.append({"t":"c","r":1,"w":consultations_index[p]})
+            
+            self.last_consultations = consultations_index
+            
         self.last_dao_statehash = statehash
         self.last_consensus = consensus
 
@@ -999,8 +1034,9 @@ class ElectrumX(SessionBase):
             await self.send_notification('blockchain.consensus.subscribe', args)
 
         if statehash_changed and self.subscribe_dao:
-            args = (dao, )
-            await self.send_notification('blockchain.dao.subscribe', args)
+            for d in dao:
+                args = (d, )
+                await self.send_notification('blockchain.dao.subscribe', args)
 
         touched = touched.intersection(self.hashX_subs)
         if touched or (height_changed and self.mempool_statuses):
