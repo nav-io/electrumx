@@ -793,7 +793,7 @@ class SessionManager:
                     
             for p in self.last_proposals:
                 if p not in proposals_index:
-                     dao.append({"t":"p","r":1,"w":proposals_index[p]})
+                    dao.append({"t":"p","r":1,"w":proposals_index[p]})
                     
             self.last_proposals = proposals_index
             
