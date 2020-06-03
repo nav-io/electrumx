@@ -1039,13 +1039,13 @@ class ElectrumX(SessionBase):
             args = (consensus, )
             await self.send_notification('blockchain.consensus.subscribe', args)
 
-        if statehash_changed and self.subscribe_dao:
+        if self.subscribe_dao:
             if self.just_dao_subscribed:
                 for d in complete_dao:
                     args = (d, )
                     await self.send_notification('blockchain.dao.subscribe', args)
                 self.just_dao_subscribed = False
-            else:
+            elif statehash_changed:
                 for d in dao:
                     args = (d, )
                     await self.send_notification('blockchain.dao.subscribe', args)
