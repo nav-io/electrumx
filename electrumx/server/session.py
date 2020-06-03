@@ -817,7 +817,7 @@ class SessionManager:
                     
             for p in self.last_consultations:
                 if p not in consultations_index:
-                     dao.append({"t":"c","r":1,"w":consultations_index[p]})
+                     dao.append({"t":"c","r":1,"w":self.last_consultations[p]})
             
             self.last_consultations = consultations_index
             
