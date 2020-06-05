@@ -1032,7 +1032,7 @@ class ElectrumX(SessionBase):
             for script in self.subs_stakerscripts:
                 votes = await self.getstakervote(script)
                 if (votes != self.subs_stakerscripts[script]):
-                    await self.send_notification('blockchain.stakervote.subscribe', (votes, ))
+                    await self.send_notification('blockchain.stakervote.subscribe', (script, votes))
                     self.subs_stakerscripts[script] = votes
 
         if consensus_changed and self.subscribe_consensus:
