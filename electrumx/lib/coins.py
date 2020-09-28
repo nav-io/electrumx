@@ -3529,7 +3529,7 @@ class NavcoinTestnet(Navcoin):
     TX_COUNT_HEIGHT = 1
     NET = 'testnet'
     RPC_PORT = 44445
-    GENESIS_HASH = ('0000ca20010727d0fdf6343bc233ac5a5eb44631c89c1722b27c15017dbc2902')
+    GENESIS_HASH = ('00006fdcd481ed66a9a9c355de65b02cfec8afa60e8c4e330a8581c93b1018a4')
 
 
 class Unobtanium(AuxPowMixin, Coin):
