@@ -4,17 +4,19 @@
 FROM ubuntu:18.04
 
 WORKDIR /
-ADD https://github.com/kyuupichan/electrumx/archive/1.13.0.tar.gz /
+ADD https://github.com/aguycalled/electrumx/archive/1.14.0.tar.gz /
 RUN tar zxvf *.tar.gz
 
 RUN apt-get update && \
         apt-get -y install python3.7 python3-pip librocksdb-dev libsnappy-dev libbz2-dev libz-dev liblz4-dev && \
-        pip3 install aiohttp pylru python-rocksdb
+        pip3 install wheel setuptools aiohttp pylru python-rocksdb plyvel
+
+RUN cd / && git clone https://github.com/MaruCoinOfficial/x13-hash && cd x13-hash && python3 setup.py install
 
 RUN cd /electrumx* && python3 setup.py install
 
-ENV SERVICES="tcp://:50001"
-ENV COIN=BitcoinSV
+ENV SERVICES="tcp://:40001"
+ENV COIN=Navcoin
 ENV DB_DIRECTORY=/db
 ENV DAEMON_URL="http://username:password@hostname:port/"
 ENV ALLOW_ROOT=true
@@ -22,6 +24,8 @@ ENV DB_ENGINE=rocksdb
 ENV MAX_SEND=10000000
 ENV BANDWIDTH_UNIT_COST=50000
 ENV CACHE_MB=2000
+ENV COST_SOFT_LIMIT=0
+ENV COST_HARD_LIMIT=0
 
 VOLUME /db
 
