@@ -2136,8 +2136,8 @@ class Megacoin(BitcoinMixin, Coin):
     DESERIALIZER = lib_tx.DeserializerSegWit
     GENESIS_HASH = ('7520788e2d99eec7cf6cf7315577e126'
                     '8e177fff94cb0a7caf6a458ceeea9ac2')
-    TX_COUNT = 1957258
-    TX_COUNT_HEIGHT = 1398042
+    TX_COUNT = 2542628
+    TX_COUNT_HEIGHT = 1408161
     TX_PER_BLOCK = 2
     RPC_PORT = 7952
 
