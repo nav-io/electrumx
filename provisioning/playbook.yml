@@ -1,0 +1,34 @@
+---
+- hosts: all
+  vars_files:
+    - vars.yml
+  become: true
+#  roles:
+#    - { role: geerlingguy.apache }
+#    - { role: geerlingguy.php }
+  tasks:
+    - include: tasks/apt.yml
+      tags: ['apt']    
+
+    - include: tasks/system.yml
+      tags: ['system']
+      
+    - include: tasks/coins/bitcoin.yml
+      tags: ['bitcoin']
+
+#    - include: tasks/rocksdb.yml
+#      tags: ['rocksdb']
+
+    - include: tasks/ssl.yml
+      tags: ['ssl']
+
+    - include: tasks/electrumx.yml
+      tags: ['electrumx'] 
+
+#    - include: tasks/dashboard.yml
+#      tags: ['dashboard']
+  handlers:
+    - name: Restart ElectrumX
+      service:
+        name: electrumx
+        state: restarted
