@@ -7,33 +7,42 @@
 
 '''Classes for local RPC server and remote client TCP/SSL servers.'''
 
+import asyncio
 import codecs
 import datetime
 import itertools
-import json
 import math
 import os
 import ssl
 import time
 from collections import defaultdict
 from functools import partial
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address, IPv6Address, IPv4Network, IPv6Network
+from typing import Optional, TYPE_CHECKING
+import asyncio
 
 import attr
-from aiorpcx import (
-    RPCSession, JSONRPCAutoDetect, JSONRPCConnection, serve_rs, serve_ws,
-    TaskGroup, handler_invocation, RPCError, Request, sleep, Event, ReplyAndDisconnect
-)
 import pylru
+from aiorpcx import (Event, JSONRPCAutoDetect, JSONRPCConnection,
+                     ReplyAndDisconnect, Request, RPCError, RPCSession,
+                     TaskGroup, handler_invocation, serve_rs, serve_ws, sleep,
+                     NewlineFramer)
 
 import electrumx
+import electrumx.lib.util as util
+from electrumx.lib.hash import (HASHX_LEN, Base58Error, hash_to_hex_str,
+                                hex_str_to_hash, sha256)
 from electrumx.lib.merkle import MerkleCache
 from electrumx.lib.text import sessions_lines
-import electrumx.lib.util as util
-from electrumx.lib.hash import (sha256, hash_to_hex_str, hex_str_to_hash,
-                                HASHX_LEN, Base58Error)
 from electrumx.server.daemon import DaemonError
 from electrumx.server.peers import PeerManager
+
+if TYPE_CHECKING:
+    from electrumx.server.db import DB
+    from electrumx.server.env import Env
+    from electrumx.server.block_processor import BlockProcessor
+    from electrumx.server.daemon import Daemon
+    from electrumx.server.mempool import MemPool
 
 
 BAD_REQUEST = 1
@@ -110,7 +119,15 @@ class SessionReferences:
 class SessionManager:
     '''Holds global state about all sessions.'''
 
-    def __init__(self, env, db, bp, daemon, mempool, shutdown_event):
+    def __init__(
+            self,
+            env: 'Env',
+            db: 'DB',
+            bp: 'BlockProcessor',
+            daemon: 'Daemon',
+            mempool: 'MemPool',
+            shutdown_event: asyncio.Event,
+    ):
         env.max_send = max(350000, env.max_send)
         self.env = env
         self.db = db
@@ -125,6 +142,7 @@ class SessionManager:
         self.session_groups = {}    # group name->SessionGroup instance
         self.dao_complete = []
         self.txs_sent = 0
+        # Would use monotonic time, but aiorpcx sessions use Unix time:
         self.start_time = time.time()
         self._method_counts = defaultdict(int)
         self._reorg_count = 0
@@ -138,6 +156,7 @@ class SessionManager:
         self._merkle_cache = pylru.lrucache(1000)
         self._merkle_lookups = 0
         self._merkle_hits = 0
+        self.estimatefee_cache = pylru.lrucache(1000)
         self.notified_height = None
         self.last_dao_statehash = None
         self.last_proposals = {}
@@ -239,7 +258,7 @@ class SessionManager:
                 data = self._session_data(for_log=True)
                 for line in sessions_lines(data):
                     self.logger.info(line)
-                self.logger.info(json.dumps(self._get_info()))
+                self.logger.info(util.json_serialize(self._get_info()))
 
     async def _disconnect_sessions(self, sessions, reason, *, force_after=1.0):
         if sessions:
@@ -259,7 +278,7 @@ class SessionManager:
             del stale_sessions
 
     async def _handle_chain_reorgs(self):
-        '''Clear caches on chain reorgs.'''
+        '''Clear certain caches on chain reorgs.'''
         while True:
             await self.bp.backed_up_event.wait()
             self.logger.info(f'reorg signalled; clearing tx_hashes and merkle caches')
@@ -416,7 +435,7 @@ class SessionManager:
         real_name: "bch.electrumx.cash t50001 s50002" for example
         '''
         await self.peer_mgr.add_localRPC_peer(real_name)
-        return "peer '{}' added".format(real_name)
+        return f"peer '{real_name}' added"
 
     async def rpc_disconnect(self, session_ids):
         '''Disconnect sesssions.
@@ -608,8 +627,9 @@ class SessionManager:
 
             self.logger.info(f'max response size {self.env.max_send:,d} bytes')
             if self.env.drop_client is not None:
-                self.logger.info('drop clients matching: {}'
-                                 .format(self.env.drop_client.pattern))
+                self.logger.info(
+                    f'drop clients matching: {self.env.drop_client.pattern}'
+                )
             for service in self.env.report_services:
                 self.logger.info(f'advertising service {service}')
             # Start notifications; initialize hsub_results
@@ -824,18 +844,24 @@ class SessionManager:
         for session in self.sessions:
             await self._task_group.spawn(session.notify, touched, height_changed, consensus_changed, consensus, statehash_changed, dao, self.dao_complete)
 
-    def _ip_addr_group_name(self, session):
+    def _ip_addr_group_name(self, session) -> Optional[str]:
         host = session.remote_address().host
-        if isinstance(host, IPv4Address):
-            return '.'.join(str(host).split('.')[:3])
-        if isinstance(host, IPv6Address):
-            return ':'.join(host.exploded.split(':')[:3])
+        if isinstance(host, (IPv4Address, IPv6Address)):
+            if host.is_private:  # exempt private addresses
+                return None
+            if isinstance(host, IPv4Address):
+                subnet_size = self.env.session_group_by_subnet_ipv4
+                subnet = IPv4Network(host).supernet(prefixlen_diff=32 - subnet_size)
+                return str(subnet)
+            elif isinstance(host, IPv6Address):
+                subnet_size = self.env.session_group_by_subnet_ipv6
+                subnet = IPv6Network(host).supernet(prefixlen_diff=128 - subnet_size)
+                return str(subnet)
         return 'unknown_addr'
 
-    def _timeslice_name(self, session):
-        return f't{int(session.start_time - self.start_time) // 300}'
-
-    def _session_group(self, name, weight):
+    def _session_group(self, name: Optional[str], weight: float) -> Optional[SessionGroup]:
+        if name is None:
+            return None
         group = self.session_groups.get(name)
         if not group:
             group = SessionGroup(name, weight, set(), 0)
@@ -846,9 +872,9 @@ class SessionManager:
         self.session_event.set()
         # Return the session groups
         groups = (
-            self._session_group(self._timeslice_name(session), 0.03),
             self._session_group(self._ip_addr_group_name(session), 1.0),
         )
+        groups = tuple(group for group in groups if group is not None)
         self.sessions[session] = groups
         for group in groups:
             group.sessions.add(session)
@@ -873,7 +899,15 @@ class SessionBase(RPCSession):
     session_counter = itertools.count()
     log_new = False
 
-    def __init__(self, session_mgr, db, mempool, peer_mgr, kind, transport):
+    def __init__(
+            self,
+            session_mgr: 'SessionManager',
+            db: 'DB',
+            mempool: 'MemPool',
+            peer_mgr: 'PeerManager',
+            kind: str,
+            transport,
+    ):
         connection = JSONRPCConnection(JSONRPCAutoDetect)
         super().__init__(transport, connection=connection)
         self.session_mgr = session_mgr
@@ -895,11 +929,14 @@ class SessionBase(RPCSession):
         self.logger = util.ConnectionLogger(logger, context)
         self.logger.info(f'{self.kind} {self.remote_address_string()}, '
                          f'{self.session_mgr.session_count():,d} total')
-        self.recalc_concurrency()
         self.session_mgr.add_session(self)
+        self.recalc_concurrency()  # must be called after session_mgr.add_session
 
     async def notify(self, touched, height_changed):
         pass
+
+    def default_framer(self):
+        return NewlineFramer(max_size=self.env.max_recv)
 
     def remote_address_string(self, *, for_log=True):
         '''Returns the peer's IP address and port as a human-readable
@@ -943,6 +980,14 @@ class SessionBase(RPCSession):
         else:
             handler = None
         method = 'invalid method' if handler is None else request.method
+
+        # If DROP_CLIENT_UNKNOWN is enabled, check if the client identified
+        # by calling server.version previously. If not, disconnect the session
+        if self.env.drop_client_unknown and method != 'server.version' and self.client == 'unknown':
+            self.logger.info(f'disconnecting because client is unknown')
+            raise ReplyAndDisconnect(
+                BAD_REQUEST, f'use server.version to identify client')
+
         self.session_mgr._method_counts[method] += 1
         coro = handler_invocation(handler, request)()
         return await coro
@@ -1009,6 +1054,12 @@ class ElectrumX(SessionBase):
 
     def extra_cost(self):
         return self.session_mgr.extra_cost(self)
+
+    def on_disconnect_due_to_excessive_session_cost(self):
+        ip_addr = self.remote_address().host
+        groups = self.session_mgr.sessions[self]
+        group_names = [group.name for group in groups]
+        self.logger.info(f"closing session over res usage. ip: {ip_addr}. groups: {group_names}")
 
     def sub_count(self):
         return len(self.hashX_subs)
@@ -1326,7 +1377,7 @@ class ElectrumX(SessionBase):
         major, minor = divmod(ni_version, 1000000)
         minor, revision = divmod(minor, 10000)
         revision //= 100
-        daemon_version = '{:d}.{:d}.{:d}'.format(major, minor, revision)
+        daemon_version = f'{major:d}.{minor:d}.{revision:d}'
         for pair in [
                 ('$SERVER_VERSION', electrumx.version_short),
                 ('$SERVER_SUBVERSION', electrumx.version),
@@ -1376,11 +1427,39 @@ class ElectrumX(SessionBase):
         mode: CONSERVATIVE or ECONOMICAL estimation mode
         '''
         number = non_negative_integer(number)
-        self.bump_cost(2.0)
-        if mode:
-            return await self.daemon_request('estimatefee', number, mode)
+        # use whitelist for mode, otherwise it would be easy to force a cache miss:
+        if mode not in self.coin.ESTIMATEFEE_MODES:
+            raise RPCError(BAD_REQUEST, f'unknown estimatefee mode: {mode}')
+        self.bump_cost(0.1)
+
+        number = self.coin.bucket_estimatefee_block_target(number)
+        cache = self.session_mgr.estimatefee_cache
+
+        cache_item = cache.get((number, mode))
+        if cache_item is not None:
+            blockhash, feerate, lock = cache_item
+            if blockhash and blockhash == self.session_mgr.bp.tip:
+                return feerate
         else:
-            return await self.daemon_request('estimatefee', number)
+            # create lock now, store it, and only then await on it
+            lock = asyncio.Lock()
+            cache[(number, mode)] = (None, None, lock)
+        async with lock:
+            cache_item = cache.get((number, mode))
+            if cache_item is not None:
+                blockhash, feerate, lock = cache_item
+                if blockhash == self.session_mgr.bp.tip:
+                    return feerate
+            self.bump_cost(2.0)  # cache miss incurs extra cost
+            blockhash = self.session_mgr.bp.tip
+            if mode:
+                feerate = await self.daemon_request('estimatefee', number, mode)
+            else:
+                feerate = await self.daemon_request('estimatefee', number)
+            assert feerate is not None
+            assert blockhash is not None
+            cache[(number, mode)] = (blockhash, feerate, lock)
+            return feerate
 
     async def ping(self):
         '''Serves as a connection keep-alive mechanism and for the client to
@@ -1424,7 +1503,7 @@ class ElectrumX(SessionBase):
                 BAD_REQUEST, f'unsupported protocol version: {protocol_version}'))
         self.set_request_handlers(ptuple)
 
-        return (electrumx.version, self.protocol_version_string())
+        return electrumx.version, self.protocol_version_string()
 
     async def crash_old_client(self, ptuple, crash_client_ver):
         if crash_client_ver:
@@ -1473,7 +1552,7 @@ class ElectrumX(SessionBase):
         '''
         assert_tx_hash(tx_hash)
         if verbose not in (True, False):
-            raise RPCError(BAD_REQUEST, f'"verbose" must be a boolean')
+            raise RPCError(BAD_REQUEST, '"verbose" must be a boolean')
 
         self.bump_cost(1.0)
         return await self.daemon_request('getrawtransaction', tx_hash, verbose)
@@ -1501,7 +1580,7 @@ class ElectrumX(SessionBase):
         tx_pos = non_negative_integer(tx_pos)
         height = non_negative_integer(height)
         if merkle not in (True, False):
-            raise RPCError(BAD_REQUEST, f'"merkle" must be a boolean')
+            raise RPCError(BAD_REQUEST, '"merkle" must be a boolean')
 
         if merkle:
             branch, tx_hash, cost = await self.session_mgr.merkle_branch_for_tx_pos(
@@ -1599,9 +1678,9 @@ class DashElectrumX(ElectrumX):
         await super().notify(touched, height_changed)
         for mn in self.mns.copy():
             status = await self.daemon_request('masternode_list',
-                                               ['status', mn])
+                                               ('status', mn))
             await self.send_notification('masternode.subscribe',
-                                         [mn, status.get(mn)])
+                                         (mn, status.get(mn)))
 
     # Masternode command handlers
     async def masternode_announce_broadcast(self, signmnb):
@@ -1611,7 +1690,7 @@ class DashElectrumX(ElectrumX):
         signmnb: signed masternode broadcast message.'''
         try:
             return await self.daemon_request('masternode_broadcast',
-                                             ['relay', signmnb])
+                                             ('relay', signmnb))
         except DaemonError as e:
             error, = e.args
             message = error['message']
@@ -1625,7 +1704,7 @@ class DashElectrumX(ElectrumX):
         collateral: masternode collateral.
         '''
         result = await self.daemon_request('masternode_list',
-                                           ['status', collateral])
+                                           ('status', collateral))
         if result is not None:
             self.mns.add(collateral)
             return result.get(collateral)
@@ -1690,26 +1769,29 @@ class DashElectrumX(ElectrumX):
         cache = self.session_mgr.mn_cache
         if not cache or self.session_mgr.mn_cache_height != self.db.db_height:
             full_mn_list = await self.daemon_request('masternode_list',
-                                                     ['full'])
+                                                     ('full',))
             mn_payment_queue = get_masternode_payment_queue(full_mn_list)
             mn_payment_count = len(mn_payment_queue)
             mn_list = []
             for key, value in full_mn_list.items():
                 mn_data = value.split()
-                mn_info = {}
-                mn_info['vin'] = key
-                mn_info['status'] = mn_data[0]
-                mn_info['protocol'] = mn_data[1]
-                mn_info['payee'] = mn_data[2]
-                mn_info['lastseen'] = mn_data[3]
-                mn_info['activeseconds'] = mn_data[4]
-                mn_info['lastpaidtime'] = mn_data[5]
-                mn_info['lastpaidblock'] = mn_data[6]
-                mn_info['ip'] = mn_data[7]
+                mn_info = {
+                    'vin': key,
+                    'status': mn_data[0],
+                    'protocol': mn_data[1],
+                    'payee': mn_data[2],
+                    'lastseen': mn_data[3],
+                    'activeseconds': mn_data[4],
+                    'lastpaidtime': mn_data[5],
+                    'lastpaidblock': mn_data[6],
+                    'ip': mn_data[7]
+                }
                 mn_info['paymentposition'] = get_payment_position(
-                    mn_payment_queue, mn_info['payee'])
+                    mn_payment_queue, mn_info['payee']
+                )
                 mn_info['inselection'] = (
-                    mn_info['paymentposition'] < mn_payment_count // 10)
+                    mn_info['paymentposition'] < mn_payment_count // 10
+                )
                 hashX = self.coin.address_to_hashX(mn_info['payee'])
                 balance = await self.get_balance(hashX)
                 mn_info['balance'] = (sum(balance.values())
@@ -1774,7 +1856,7 @@ class SmartCashElectrumX(DashElectrumX):
 
     async def smartrewards_current(self):
         '''Returns the current smartrewards info.'''
-        result = await self.daemon_request('smartrewards', ['current'])
+        result = await self.daemon_request('smartrewards', ('current',))
         if result is not None:
             return result
         return None
@@ -1785,7 +1867,7 @@ class SmartCashElectrumX(DashElectrumX):
 
         addr: a single smartcash address
         '''
-        result = await self.daemon_request('smartrewards', ['check', addr])
+        result = await self.daemon_request('smartrewards', ('check', addr))
         if result is not None:
             return result
         return None
@@ -1829,7 +1911,7 @@ class AuxPoWElectrumX(ElectrumX):
         headers = bytearray()
 
         while cursor < len(headers_full):
-            headers.extend(headers_full[cursor:cursor+self.coin.TRUNCATED_HEADER_SIZE])
+            headers += headers_full[cursor:cursor+self.coin.TRUNCATED_HEADER_SIZE]
             cursor += self.db.dynamic_header_len(height)
             height += 1
 

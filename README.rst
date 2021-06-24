@@ -1,7 +1,7 @@
-.. image:: https://travis-ci.org/kyuupichan/electrumx.svg?branch=master
-    :target: https://travis-ci.org/kyuupichan/electrumx
-.. image:: https://coveralls.io/repos/github/kyuupichan/electrumx/badge.svg
-    :target: https://coveralls.io/github/kyuupichan/electrumx
+.. image:: https://travis-ci.org/spesmilo/electrumx.svg?branch=master
+    :target: https://travis-ci.org/spesmilo/electrumx
+.. image:: https://coveralls.io/repos/github/spesmilo/electrumx/badge.svg
+    :target: https://coveralls.io/github/spesmilo/electrumx
 
 ===============================================
 ElectrumX - Reimplementation of electrum-server
@@ -31,5 +31,6 @@ Credits
 
 Documentation
 =============
-See `readthedocs <https://electrumx.readthedocs.io/>`_.
+
+See `readthedocs <https://electrumx-spesmilo.readthedocs.io/>`_.
 
