@@ -1164,10 +1164,10 @@ class ElectrumX(SessionBase):
             touched_outpoints: Set[Tuple[bytes, int]],
             height_changed: bool,
             consensus_changed: bool,
-            consensus,
+            consensus: list,
             statehash_changed: bool,
-            dao,
-            complete_dao
+            dao: list,
+            complete_dao: list
     ):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
@@ -2030,12 +2030,22 @@ class DashElectrumX(ElectrumX):
             touched_hashxs: Set[bytes],
             touched_outpoints: Set[Tuple[bytes, int]],
             height_changed: bool,
+            consensus_changed: bool,
+            consensus: list,
+            statehash_changed: bool,
+            dao: list,
+            complete_dao: list
     ):
         '''Notify the client about changes in masternode list.'''
         await super().notify(
             touched_hashxs=touched_hashxs,
             touched_outpoints=touched_outpoints,
             height_changed=height_changed,
+            consensus_changed=consensus_changed,
+            consensus=consensus,
+            statehash_changed=statehash_changed,
+            dao=dao,
+            complete_dao=complete_dao
         )
         for mn in self.mns.copy():
             status = await self.daemon_request('masternode_list',
