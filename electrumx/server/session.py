@@ -1167,7 +1167,7 @@ class ElectrumX(SessionBase):
             consensus: list,
             statehash_changed: bool,
             dao: list,
-            complete_dao: list
+            dao_complete: list
     ):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
@@ -1190,7 +1190,7 @@ class ElectrumX(SessionBase):
 
         if self.subscribe_dao:
             if self.just_dao_subscribed:
-                for d in complete_dao:
+                for d in dao_complete:
                     args = (d, )
                     await self.send_notification('blockchain.dao.subscribe', args)
                 self.just_dao_subscribed = False
@@ -2034,7 +2034,7 @@ class DashElectrumX(ElectrumX):
             consensus: list,
             statehash_changed: bool,
             dao: list,
-            complete_dao: list
+            dao_complete: list
     ):
         '''Notify the client about changes in masternode list.'''
         await super().notify(
@@ -2045,7 +2045,7 @@ class DashElectrumX(ElectrumX):
             consensus=consensus,
             statehash_changed=statehash_changed,
             dao=dao,
-            complete_dao=complete_dao
+            dao_complete=dao_complete
         )
         for mn in self.mns.copy():
             status = await self.daemon_request('masternode_list',
