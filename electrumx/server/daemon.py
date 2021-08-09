@@ -287,6 +287,10 @@ class Daemon:
             # given a blockhash, modern bitcoind can lookup the tx even without txindex:
             # https://github.com/bitcoin/bitcoin/pull/10275
             return await self._send_single('getrawtransaction', (hex_hash, verbose, blockhash))
+          
+    async def gettransactionkeys(self, hex_hash):
+        '''Return the transaction keys with the given hash.'''
+        eturn await self._send_single('gettransactionkeys', (hex_hash))
 
     async def listproposals(self, filter):
         return await self._send_single('listproposals',
