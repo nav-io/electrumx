@@ -290,7 +290,7 @@ class Daemon:
           
     async def gettransactionkeys(self, hex_hash):
         '''Return the transaction keys with the given hash.'''
-        eturn await self._send_single('gettransactionkeys', (hex_hash))
+        return await self._send_single('gettransactionkeys', (hex_hash))
 
     async def listproposals(self, filter):
         return await self._send_single('listproposals',
