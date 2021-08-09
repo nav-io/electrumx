@@ -1898,6 +1898,19 @@ class ElectrumX(SessionBase):
                 blockhash = self.coin.header_hash(block_header).hex()
 
         return await self.daemon_request('getrawtransaction', tx_hash_hex, verbose, blockhash)
+      
+    async def transaction_get_keys(self, tx_hash):
+        '''Return the keys of a transaction given its hash
+
+        tx_hash: the transaction hash as a hexadecimal string
+        '''
+        tx_hash_bytes = assert_tx_hash(tx_hash)
+        tx_hash_hex = tx_hash
+        del tx_hash
+
+        self.bump_cost(0.25)
+
+        return await self.daemon_request('gettransactionkeys', tx_hash_hex)
 
     async def transaction_merkle(self, tx_hash, height=None):
         '''Return the merkle branch to a confirmed transaction given its hash
@@ -1964,6 +1977,7 @@ class ElectrumX(SessionBase):
             'blockchain.scripthash.subscribe': self.scripthash_subscribe,
             'blockchain.transaction.broadcast': self.transaction_broadcast,
             'blockchain.transaction.get': self.transaction_get,
+            'blockchain.transaction.get_keys': self.transaction_get_keys,
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
             'blockchain.listproposals': self.listproposals,
