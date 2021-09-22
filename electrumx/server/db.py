@@ -73,6 +73,7 @@ class DB:
     DB_VERSIONS = (9, )
 
     utxo_db: Optional['Storage']
+    tx_db: Optional['Storage']
 
     class DBError(Exception):
         '''Raised on general DB errors generally indicating corruption.'''
@@ -108,6 +109,7 @@ class DB:
         # Value: byte-concat list of (hashX + tx_num + value_sats)
         # "undo data: list of UTXOs spent at block height"
         self.utxo_db = None
+        self.tx_db = None
 
         self.fs_height = -1
         self.fs_tx_count = 0
@@ -153,6 +155,9 @@ class DB:
 
     async def _open_dbs(self, *, for_sync: bool):
         assert self.utxo_db is None
+        assert self.tx_db is None
+
+        self.tx_db = self.db_class('tx', for_sync)
 
         # First UTXO DB
         self.utxo_db = self.db_class('utxo', for_sync)
@@ -641,14 +646,8 @@ class DB:
     def raw_block_prefix(self):
         return 'meta/block'
 
-    def raw_tx_prefix(self):
-        return 'meta/tx'
-
     def raw_block_path(self, height):
         return f'{self.raw_block_prefix()}{height:d}'
-
-    def raw_tx_path(self, hash):
-        return f'{self.raw_tx_prefix()}{hash.hex()}'
 
     def read_raw_block(self, height):
         '''Returns a raw block read from disk.  Raises FileNotFoundError
@@ -670,13 +669,13 @@ class DB:
     def read_raw_tx(self, hash):
         '''Returns a raw tx read from disk.  Raises FileNotFoundError
         if the block isn't on-disk.'''
-        with util.open_file(self.raw_tx_path(hash)) as f:
-            return f.read(-1)
+        prefix = b't' + hash
+        return db.tx_db.get(prefix)
 
     def write_raw_tx(self, tx, hash):
         '''Write a raw tx to disk.'''
-        with util.open_truncate(self.raw_tx_path(hash)) as f:
-            f.write(tx)
+        prefix = b't' + hash
+        return db.tx_db.put(prefix, tx)
 
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''
