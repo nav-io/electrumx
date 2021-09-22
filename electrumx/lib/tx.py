@@ -104,6 +104,24 @@ class TxOutput:
             pack_varbytes(self.pk_script),
         ))
 
+@dataclass
+class TxOutputNavcoin:
+    __slots__ = 'value', 'pk_script', 'ek', 'ok', 'sk'
+    value: int
+    pk_script: bytes
+    ek: bytes
+    ok: bytes
+    sk: bytes
+
+    def serialize(self):
+        return b''.join((
+            pack_le_int64(self.value),
+            pack_varbytes(self.pk_script),
+            pack_varbytes(self.ek),
+            pack_varbytes(self.ok),
+            pack_varbytes(self.sk),
+        ))
+
 
 @dataclass
 class TXOSpendStatus:
@@ -589,6 +607,9 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
 
     def _read_output(self):
         value = self._read_le_int64()
+        ek = None
+        ok = None
+        sk = None
         if value == -1:
             value = self._read_le_int64()
             ek = self._read_varbytes()
@@ -615,9 +636,12 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
             a = self._read_varbytes()
             b = self._read_varbytes()
             t = self._read_varbytes()
-        return TxOutput(
+        return TxOutputNavcoin(
             value,  # value
             self._read_varbytes(),  # pk_script
+            ek,
+            ok,
+            sk
         )
 
 

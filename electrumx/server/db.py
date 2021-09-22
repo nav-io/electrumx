@@ -677,6 +677,17 @@ class DB:
         prefix = b't' + hash
         return self.tx_db.put(prefix, tx)
 
+    def read_tx_keys(self, hash):
+        '''Read tx keys to disk'''
+        prefix = b'k' + hash
+        keys = self.tx_db.get(prefix)
+        return ast.literal_eval(keys.decode())
+
+    def write_tx_keys(self, keys, hash):
+        '''Write tx keys to disk'''
+        prefix = b'k' + hash
+        return self.tx_db.put(prefix, repr(keys).encode())
+
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''
         prefix = b'U'

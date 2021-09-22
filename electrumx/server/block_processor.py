@@ -465,10 +465,17 @@ class BlockProcessor:
             tx_numb = _pack_txnum(tx_num)
 
             self.db.write_raw_tx(tx.raw, tx_hash)
+            tx_keys = {
+                'txidkeys': tx_hash.hex(),
+                'vin': [],
+                'vout': []
+            }
 
             # Spend the inputs
             for txin in tx.inputs:
                 if txin.is_generation():
+                    tx_keys.vin[i].append({})
+                    i = i + 1
                     continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
@@ -476,11 +483,24 @@ class BlockProcessor:
                 prevout_tuple = (txin.prev_hash, txin.prev_idx)
                 put_txo_to_spender_map(prevout_tuple, tx_hash)
                 add_touched_outpoint(prevout_tuple)
+                prevTx = self.db.read_raw_tx(txin.prev_hash)
+                prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
+                obj = {'txid': txin.prev_hash.hex(), 'vout': txin.prev_idx}
+                if txout.ek or txout.sk:
+                    obj['ek'] = txout.ek.hex()
+                    obj['sk'] = txout.sk.hex()
+                else:
+                    obj['script'] = prevOut.pk_script.hex()
+                tx_keys["vin"].append(obj)
+
+            i = 0
 
             # Add the new UTXOs
             for idx, txout in enumerate(tx.outputs):
                 # Ignore unspendable outputs
                 if is_unspendable(txout.pk_script):
+                    tx_keys.vout[i].append({})
+                    i = i + 1
                     continue
 
                 # Get the hashX
@@ -489,6 +509,12 @@ class BlockProcessor:
                 put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
                          hashX + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
+                if txout.ek or txout.sk:
+                    tx_keys["vout"].append({'ek': txout.ek.hex(), 'sk': txout.sk.hex()})
+                else:
+                    tx_keys["vout"].append({'script': txout.pk_script.hex()})
+
+            self.db.write_tx_keys(tx_keys, tx_hash)
 
             append_hashXs(hashXs)
             update_touched_hashxs(hashXs)

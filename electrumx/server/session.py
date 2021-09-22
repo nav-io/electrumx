@@ -1913,6 +1913,13 @@ class ElectrumX(SessionBase):
         tx_hash_hex = tx_hash
         del tx_hash
 
+        try:
+            tx = self.db.read_tx_keys(tx_hash_hex)
+            if tx is not None:
+                return tx
+        finally:
+            pass
+
         self.bump_cost(0.25)
 
         return await self.daemon_request('gettransactionkeys', tx_hash_hex)
