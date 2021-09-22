@@ -1888,6 +1888,12 @@ class ElectrumX(SessionBase):
         if verbose not in (True, False):
             raise RPCError(BAD_REQUEST, '"verbose" must be a boolean')
 
+        if verbose == False:
+            try:
+                return self.db.read_raw_tx(tx_hash_hex)
+            except FileNotFoundError:
+                pass
+
         self.bump_cost(1.0)
 
         blockhash = None

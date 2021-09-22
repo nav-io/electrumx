@@ -641,8 +641,14 @@ class DB:
     def raw_block_prefix(self):
         return 'meta/block'
 
+    def raw_tx_prefix(self):
+        return 'meta/tx'
+
     def raw_block_path(self, height):
         return f'{self.raw_block_prefix()}{height:d}'
+
+    def raw_tx_path(self, hash):
+        return f'{self.raw_tx_prefix()}{hash.hex()}'
 
     def read_raw_block(self, height):
         '''Returns a raw block read from disk.  Raises FileNotFoundError
@@ -660,6 +666,17 @@ class DB:
             os.remove(self.raw_block_path(del_height))
         except FileNotFoundError:
             pass
+
+    def read_raw_tx(self, hash):
+        '''Returns a raw tx read from disk.  Raises FileNotFoundError
+        if the block isn't on-disk.'''
+        with util.open_file(self.raw_tx_path(hash)) as f:
+            return f.read(-1)
+
+    def write_raw_tx(self, tx, hash):
+        '''Write a raw tx to disk.'''
+        with util.open_truncate(self.raw_tx_path(hash)) as f:
+            f.write(tx)
 
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''

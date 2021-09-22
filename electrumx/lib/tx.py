@@ -484,12 +484,13 @@ class DeserializerPIVX(Deserializer):
 @dataclass
 class TxTime:
     '''Class representing transaction that has a time field.'''
-    __slots__ = 'version', 'time', 'inputs', 'outputs', 'locktime'
+    __slots__ = 'version', 'time', 'inputs', 'outputs', 'locktime', 'raw'
     version: int
     time: int
     inputs: Sequence
     outputs: Sequence
     locktime: int
+    raw: bytes
 
 
 class DeserializerTxTime(Deserializer):
@@ -507,7 +508,7 @@ class DeserializerTxTime(Deserializer):
 class TxTimeSegWit:
     '''Class representing a SegWit transaction with time.'''
     __slots__ = ('version', 'time', 'marker', 'flag', 'inputs', 'outputs',
-                 'witness', 'locktime')
+                 'witness', 'locktime', 'raw')
     version: int
     time: int
     marker: int
@@ -516,6 +517,7 @@ class TxTimeSegWit:
     outputs: Sequence
     witness: Sequence
     locktime: int
+    raw: bytes
 
 
 class DeserializerTxTimeSegWit(DeserializerTxTime):
@@ -557,7 +559,7 @@ class DeserializerTxTimeSegWit(DeserializerTxTime):
         vsize = (3 * base_size + self.binary_length) // 4
 
         return TxTimeSegWit(
-            version, time, marker, flag, inputs, outputs, witness, locktime),\
+            version, time, marker, flag, inputs, outputs, witness, locktime, orig_ser),\
             self.TX_HASH_FN(orig_ser), vsize
 
     def read_tx(self):
@@ -619,7 +621,7 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
         )
 
 
-    def read_tx_no_segwit(self):
+    def read_tx_no_segwit(self, start):
         version = self._read_le_int32()
         time = self._read_le_uint32()
         inputs = self._read_inputs()
@@ -637,7 +639,8 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
             time,
             inputs,
             outputs,
-            locktime
+            locktime,
+            self.binary[start:self.cursor]
         )
 
     def _read_tx_parts(self):
@@ -645,7 +648,7 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
         start = self.cursor
         marker = self.binary[self.cursor + 8]
         if marker:
-            tx = self.read_tx_no_segwit()
+            tx = self.read_tx_no_segwit(start)
             tx_hash = self.TX_HASH_FN(self.binary[start:self.cursor])
             return tx, tx_hash, self.binary_length
 
@@ -675,7 +678,7 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
         orig_ser += self.binary[start:self.cursor]
 
         return TxTimeSegWit(
-            version, time, marker, flag, inputs, outputs, witness, locktime),\
+            version, time, marker, flag, inputs, outputs, witness, locktime, orig_ser),\
             self.TX_HASH_FN(orig_ser), vsize
 
     def read_tx(self):

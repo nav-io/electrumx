@@ -464,6 +464,8 @@ class BlockProcessor:
             append_hashX = hashXs.append
             tx_numb = _pack_txnum(tx_num)
 
+            self.db.write_raw_tx(tx.raw, tx_hash)
+
             # Spend the inputs
             for txin in tx.inputs:
                 if txin.is_generation():

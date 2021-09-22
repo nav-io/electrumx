@@ -281,6 +281,7 @@ class Daemon:
         '''Return the serialized raw transaction with the given hash.'''
         # Cast to int because some coin daemons are old and require it
         verbose = int(verbose)
+
         if blockhash is None:
             return await self._send_single('getrawtransaction', (hex_hash, verbose))
         else:
