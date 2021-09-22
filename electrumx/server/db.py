@@ -670,12 +670,12 @@ class DB:
         '''Returns a raw tx read from disk.  Raises FileNotFoundError
         if the block isn't on-disk.'''
         prefix = b't' + hash
-        return db.tx_db.get(prefix)
+        return self.tx_db.get(prefix)
 
     def write_raw_tx(self, tx, hash):
         '''Write a raw tx to disk.'''
         prefix = b't' + hash
-        return db.tx_db.put(prefix, tx)
+        return self.tx_db.put(prefix, tx)
 
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''
