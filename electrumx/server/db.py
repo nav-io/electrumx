@@ -672,7 +672,7 @@ class DB:
         '''Returns a raw tx read from disk.  Raises FileNotFoundError
         if the block isn't on-disk.'''
         prefix = b't' + hash
-        return self.tx_db.get(prefix)
+        return self.tx_db.get(prefix).hex()
 
     def write_raw_tx(self, tx, hash):
         '''Write a raw tx to disk.'''
