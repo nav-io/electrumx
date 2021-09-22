@@ -496,7 +496,7 @@ class BlockProcessor:
             for idx, txout in enumerate(tx.outputs):
                 # Ignore unspendable outputs
                 if is_unspendable(txout.pk_script):
-                    tx_keys.["vout"].append({})
+                    tx_keys["vout"].append({})
                     continue
 
                 # Get the hashX
