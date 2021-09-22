@@ -671,7 +671,7 @@ class DB:
     def read_raw_tx(self, hash):
         '''Returns a raw tx read from disk.  Raises FileNotFoundError
         if the block isn't on-disk.'''
-        prefix = b't' + hash
+        prefix = b't' + hash.hex()
         return self.tx_db.get(prefix)
 
     def write_raw_tx(self, tx, hash):
