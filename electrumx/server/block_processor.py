@@ -474,7 +474,7 @@ class BlockProcessor:
             # Spend the inputs
             for txin in tx.inputs:
                 if txin.is_generation():
-                    tx_keys["vin"][i].append({})
+                    tx_keys["vin"].append({})
                     continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
