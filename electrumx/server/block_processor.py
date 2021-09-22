@@ -474,8 +474,7 @@ class BlockProcessor:
             # Spend the inputs
             for txin in tx.inputs:
                 if txin.is_generation():
-                    tx_keys.vin[i].append({})
-                    i = i + 1
+                    tx_keys["vin"][i].append({})
                     continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
@@ -486,21 +485,18 @@ class BlockProcessor:
                 prevTx = self.db.read_raw_tx(txin.prev_hash)
                 prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
                 obj = {'txid': txin.prev_hash.hex(), 'vout': txin.prev_idx}
-                if txout.ek or txout.sk:
+                if txout.ek and txout.sk:
                     obj['ek'] = txout.ek.hex()
                     obj['sk'] = txout.sk.hex()
                 else:
                     obj['script'] = prevOut.pk_script.hex()
                 tx_keys["vin"].append(obj)
 
-            i = 0
-
             # Add the new UTXOs
             for idx, txout in enumerate(tx.outputs):
                 # Ignore unspendable outputs
                 if is_unspendable(txout.pk_script):
-                    tx_keys.vout[i].append({})
-                    i = i + 1
+                    tx_keys.["vout"].append({})
                     continue
 
                 # Get the hashX
@@ -509,7 +505,7 @@ class BlockProcessor:
                 put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
                          hashX + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
-                if txout.ek or txout.sk:
+                if txout.ek and txout.sk:
                     tx_keys["vout"].append({'ek': txout.ek.hex(), 'sk': txout.sk.hex()})
                 else:
                     tx_keys["vout"].append({'script': txout.pk_script.hex()})
