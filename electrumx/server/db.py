@@ -202,7 +202,9 @@ class DB:
             self.logger.info('closing DBs to re-open for serving')
             self.utxo_db.close()
             self.history.close_db()
+            self.tx_db.close()
             self.utxo_db = None
+            self.tx_db = None
         await self._open_dbs(for_sync=False)
 
     # Header merkle cache
