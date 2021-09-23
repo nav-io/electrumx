@@ -466,7 +466,6 @@ class BlockProcessor:
 
             self.db.write_raw_tx(tx.raw, tx_hash)
             tx_keys = {
-                'txidkeys': tx_hash.hex(),
                 'vin': [],
                 'vout': []
             }
