@@ -683,7 +683,9 @@ class DB:
         '''Read tx keys to disk'''
         prefix = b'k' + hash
         keys = self.tx_db.get(prefix)
-        return ast.literal_eval(keys.decode())
+        if keys is not None:
+            return ast.literal_eval(keys.decode())
+        return None
 
     def write_tx_keys(self, keys, hash):
         '''Write tx keys to disk'''
