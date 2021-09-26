@@ -1889,9 +1889,9 @@ class ElectrumX(SessionBase):
             raise RPCError(BAD_REQUEST, '"verbose" must be a boolean')
 
         if verbose == False:
-            tx = self.db.read_raw_tx(tx_hash_bytes).hex()
+            tx = self.db.read_raw_tx(tx_hash_bytes)
             if tx is not None:
-                return tx
+                return tx.hex()
 
         self.bump_cost(1.0)
 
