@@ -683,7 +683,7 @@ class DB:
         '''Read tx keys from disk'''
         prefix = b'k' + hash
         keys = self.tx_db.get(prefix)
-        if keys is not None:
+        if keys:
             return ast.literal_eval(keys.decode())
         return None
 
@@ -691,7 +691,7 @@ class DB:
         '''Read staking keys from disk'''
         prefix = b's' + spending
         keys = self.tx_db.get(prefix)
-        if keys is not None:
+        if keys:
             return ast.literal_eval(keys.decode())
         return []
 
