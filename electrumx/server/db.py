@@ -706,6 +706,12 @@ class DB:
 
         prevKeys = self.read_staking_keys(spending)
 
+        if staking is None:
+            staking = b''
+
+        if voting is None:
+            voting = b''
+
         if [staking.hex(), voting.hex()] not in prevKeys:
             prevKeys.append([staking.hex(), voting.hex()])
             return self.tx_db.put(prefix, repr(prevKeys).encode())
