@@ -702,7 +702,7 @@ class DB:
 
     def write_staking_keys(self, spending, staking, voting):
         '''Write tx keys to disk'''
-        prefix = b's' + hash
+        prefix = b's' + spending
 
         prevKeys = self.read_staking_keys(spending)
 
