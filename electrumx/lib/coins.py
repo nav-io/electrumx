@@ -3590,6 +3590,88 @@ class Navcoin(Coin):
         return sha256(script).digest()[:HASHX_LEN]
 
     @classmethod
+    def get_staking_address(cls, script):
+        '''Returns a hashX from a script. Patch for P2PK outputs'''
+        def match(ops, pattern):
+            if len(ops) != len(pattern):
+                return False
+            for op, pop in zip(ops, pattern):
+                if pop != op:
+                    # -1 means 'data push', whose op is an (op, data) tuple
+                    if pop == -1 and isinstance(op, tuple):
+                        continue
+                    return False
+            return True
+
+        ops = []
+        try:
+            ops = Script.get_ops(script)
+        except ScriptError:
+            return
+
+        if match(ops, ScriptPubKey.TO_P2CS_OPS):
+            return ops[4][-1]
+
+        if match(ops, ScriptPubKey.TO_P2CS2_OPS):
+            return ops[6][-1]
+
+        return
+
+    @classmethod
+    def get_spending_address(cls, script):
+        '''Returns a hashX from a script. Patch for P2PK outputs'''
+        def match(ops, pattern):
+            if len(ops) != len(pattern):
+                return False
+            for op, pop in zip(ops, pattern):
+                if pop != op:
+                    # -1 means 'data push', whose op is an (op, data) tuple
+                    if pop == -1 and isinstance(op, tuple):
+                        continue
+                    return False
+            return True
+
+        ops = []
+        try:
+            ops = Script.get_ops(script)
+        except ScriptError:
+            return
+
+        if match(ops, ScriptPubKey.TO_P2CS_OPS):
+            return ops[10][-1]
+
+        if match(ops, ScriptPubKey.TO_P2CS2_OPS):
+            return ops[12][-1]
+
+        return
+
+    @classmethod
+    def get_voting_address(cls, script):
+        '''Returns a hashX from a script. Patch for P2PK outputs'''
+
+        def match(ops, pattern):
+            if len(ops) != len(pattern):
+                return False
+            for op, pop in zip(ops, pattern):
+                if pop != op:
+                    # -1 means 'data push', whose op is an (op, data) tuple
+                    if pop == -1 and isinstance(op, tuple):
+                        continue
+                    return False
+            return True
+
+        ops = []
+        try:
+            ops = Script.get_ops(script)
+        except ScriptError:
+            return
+
+        if match(ops, ScriptPubKey.TO_P2CS2_OPS):
+            return ops[0][-1]
+
+        return
+
+    @classmethod
     def hashX_from_script(cls, script):
         '''Returns a hashX from a script.'''
         def match(ops, pattern):
@@ -3613,8 +3695,8 @@ class Navcoin(Coin):
             script = ScriptPubKey.P2PKH_script(hash160(ops[0][-1]))
 
         return sha256(script).digest()[:HASHX_LEN]
-      
-      
+
+
 class NavcoinTestnet(Navcoin):
     SHORTNAME = "TNAV"
     P2PKH_VERBYTE = bytes.fromhex("6F")

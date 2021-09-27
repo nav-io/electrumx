@@ -59,7 +59,10 @@ OpCodes = Enumeration("Opcodes", [
     "OP_CODESEPARATOR", "OP_CHECKSIG", "OP_CHECKSIGVERIFY", "OP_CHECKMULTISIG",
     "OP_CHECKMULTISIGVERIFY",
     "OP_NOP1",
-    "OP_CHECKLOCKTIMEVERIFY", "OP_CHECKSEQUENCEVERIFY"
+    "OP_CHECKLOCKTIMEVERIFY", "OP_CHECKSEQUENCEVERIFY", ("OP_CFUND", 0xc1),
+    ("OP_PROP", 0xc2), ("OP_PREQ", 0xc3), ("OP_YES", 0xc4), ("OP_NO", 0xc5),
+    ("OP_ABSTAIN", 0xc7), ("OP_REMOVE", 0xc8), ("OP_DAO", 0xc9), ("OP_ANSWER", 0xca),
+    ("OP_CONSULTATION", 0xcb), ("OP_COINSTAKE", 0xc6), ("OP_POOL", 0xd0)
 ])
 
 
@@ -104,6 +107,13 @@ class ScriptPubKey:
                       OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG)
     TO_P2SH_OPS = (OpCodes.OP_HASH160, -1, OpCodes.OP_EQUAL)
     TO_PUBKEY_OPS = (-1, OpCodes.OP_CHECKSIG)
+    TO_P2CS_OPS = (OpCodes.OP_COINSTAKE, OpCodes.OP_IF, OpCodes.OP_DUP, OpCodes.OP_HASH160, -1,
+                      OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG, OpCodes.OP_ELSE, OpCodes.OP_DUP,
+                      OpCodes.OP_HASH160, -1, OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG, OpCodes.OP_ENDIF)
+    TO_P2CS2_OPS = (-1, OpCodes.OP_DROP, OpCodes.OP_COINSTAKE, OpCodes.OP_IF, OpCodes.OP_DUP,
+                      OpCodes.OP_HASH160, -1, OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG, OpCodes.OP_ELSE,
+                      OpCodes.OP_DUP, OpCodes.OP_HASH160, -1, OpCodes.OP_EQUALVERIFY, OpCodes.OP_CHECKSIG,
+                      OpCodes.OP_ENDIF)
 
     @classmethod
     def P2SH_script(cls, hash160):

@@ -509,6 +509,13 @@ class BlockProcessor:
                 else:
                     tx_keys["vout"].append({'script': txout.pk_script.hex()})
 
+                spending = self.coin.get_spending_address(txout.pk_script)
+                voting = self.coin.get_voting_address(txout.pk_script)
+                staking = self.coin.get_staking_address(txout.pk_script)
+
+                if staking is not None:
+                    print(spending, staking, voting)
+
             self.db.write_tx_keys(tx_keys, tx_hash)
 
             append_hashXs(hashXs)
