@@ -1924,6 +1924,23 @@ class ElectrumX(SessionBase):
 
         return await self.daemon_request('gettransactionkeys', tx_hash_hex)
 
+    async def staking_get_keys(self, spending_pkh):
+        '''Return the staking keys of a spending pkh
+
+        spending_pkh: the spending pkh as a hexadecimal string
+        '''
+        spending_pkh_bytes = assert_tx_hash(spending_pkh)
+        del spending_pkh
+
+        try:
+            tx = self.db.read_staking_keys(spending_pkh_bytes)
+            if tx is not None:
+                return tx
+        finally:
+            pass
+
+        return []
+
     async def transaction_merkle(self, tx_hash, height=None):
         '''Return the merkle branch to a confirmed transaction given its hash
         and height.

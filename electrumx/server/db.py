@@ -680,17 +680,35 @@ class DB:
         return self.tx_db.put(prefix, tx)
 
     def read_tx_keys(self, hash):
-        '''Read tx keys to disk'''
+        '''Read tx keys from disk'''
         prefix = b'k' + hash
         keys = self.tx_db.get(prefix)
         if keys is not None:
             return ast.literal_eval(keys.decode())
         return None
 
+    def read_staking_keys(self, spending):
+        '''Read staking keys from disk'''
+        prefix = b's' + spending
+        keys = self.tx_db.get(prefix)
+        if keys is not None:
+            return ast.literal_eval(keys.decode())
+        return []
+
     def write_tx_keys(self, keys, hash):
         '''Write tx keys to disk'''
         prefix = b'k' + hash
         return self.tx_db.put(prefix, repr(keys).encode())
+
+    def write_staking_keys(self, spending, staking, voting):
+        '''Write tx keys to disk'''
+        prefix = b's' + hash
+
+        prevKeys = self.read_staking_keys(spending)
+
+        if [staking.hex(), voting.hex()] not in prevKeys:
+            prevKeys.append([staking.hex(), voting.hex()])
+            return self.tx_db.put(prefix, repr(prevKeys).encode())
 
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''

@@ -514,7 +514,7 @@ class BlockProcessor:
                 staking = self.coin.get_staking_address(txout.pk_script)
 
                 if staking is not None:
-                    print(spending, staking, voting)
+                    self.db.write_staking_keys(spending, staking, voting)
 
             self.db.write_tx_keys(tx_keys, tx_hash)
 
