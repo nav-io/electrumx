@@ -105,6 +105,20 @@ def assert_tx_hash(value):
     raise RPCError(BAD_REQUEST, f'{value} should be a transaction hash')
 
 
+def assert_hash(value):
+    '''Raise an RPCError if the value is not a hexadecimal hash.
+
+    If it is valid, return it as binary hash.
+    '''
+    try:
+        raw_hash = hex_str_to_hash(value)
+        if len(raw_hash) == 20:
+            return raw_hash
+    except (ValueError, TypeError):
+        pass
+    raise RPCError(BAD_REQUEST, f'{value} should be a hash')
+
+
 def assert_status_hash(value):
     '''Raise an RPCError if the value is not a valid hexadecimal scripthash status.
 
@@ -1929,7 +1943,7 @@ class ElectrumX(SessionBase):
 
         spending_pkh: the spending pkh as a hexadecimal string
         '''
-        spending_pkh_bytes = assert_tx_hash(spending_pkh)
+        spending_pkh_bytes = assert_hash(spending_pkh)
         del spending_pkh
 
         try:
