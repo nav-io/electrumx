@@ -484,7 +484,7 @@ class BlockProcessor:
                 prevTx = self.db.read_raw_tx(txin.prev_hash)
                 if isinstance(prevTx, bytes):
                     prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
-                    obj = {'txid': txin.prev_hash.reverse().hex(), 'vout': txin.prev_idx}
+                    obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
                     if prevOut.ok and prevOut.sk:
                         obj['outputKey'] = prevOut.ok.hex()
                         obj['spendingKey'] = prevOut.sk.hex()
