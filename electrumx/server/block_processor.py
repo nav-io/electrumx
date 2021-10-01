@@ -482,14 +482,18 @@ class BlockProcessor:
                 put_txo_to_spender_map(prevout_tuple, tx_hash)
                 add_touched_outpoint(prevout_tuple)
                 prevTx = self.db.read_raw_tx(txin.prev_hash)
-                prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
-                obj = {'txid': txin.prev_hash.hex(), 'vout': txin.prev_idx}
-                if txout.ok and txout.sk:
-                    obj['outputKey'] = txout.ok.hex()
-                    obj['spendingKey'] = txout.sk.hex()
+                if isinstance(prevTx, bytes):
+                    prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
+                    obj = {'txid': txin.prev_hash.reverse().hex(), 'vout': txin.prev_idx}
+                    if prevOut.ok and prevOut.sk:
+                        obj['outputKey'] = prevOut.ok.hex()
+                        obj['spendingKey'] = prevOut.sk.hex()
+                    else:
+                        obj['script'] = prevOut.pk_script.hex()
+                    tx_keys["vin"].append(obj)
                 else:
-                    obj['script'] = prevOut.pk_script.hex()
-                tx_keys["vin"].append(obj)
+                    tx_keys["vin"].append({})
+                    continue
 
             # Add the new UTXOs
             for idx, txout in enumerate(tx.outputs):
