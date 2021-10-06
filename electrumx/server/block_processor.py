@@ -485,7 +485,7 @@ class BlockProcessor:
                 if isinstance(prevTx, bytes):
                     prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
                     obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
-                    if txout.pk_script.hex() == "51":
+                    if txout.pk_script.hex() == "51" and prevOut.ok and prevOut.sk:
                         obj['outputKey'] = prevOut.ok[::-1].hex()
                         obj['spendingKey'] = prevOut.sk[::-1].hex()
                     else:
@@ -508,7 +508,7 @@ class BlockProcessor:
                 put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
                          hashX + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
-                if txout.pk_script.hex() == "51":
+                if txout.pk_script.hex() == "51" and txout.ok and txout.sk:
                     tx_keys["vout"].append({'outputKey': txout.ok[::-1].hex(), 'spendingKey': txout.sk[::-1].hex()})
                 else:
                     tx_keys["vout"].append({'script': txout.pk_script.hex()})
