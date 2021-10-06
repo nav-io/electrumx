@@ -486,10 +486,10 @@ class BlockProcessor:
                     prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
                     obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
                     if prevOut.ok and prevOut.sk:
-                        obj['outputKey'] = prevOut.ok.hex()
-                        obj['spendingKey'] = prevOut.sk.hex()
+                        obj['outputKey'] = prevOut.ok.reverse().hex()
+                        obj['spendingKey'] = prevOut.sk.reverse().hex()
                     else:
-                        obj['script'] = prevOut.pk_script.hex()
+                        obj['script'] = prevOut.pk_script.reverse().hex()
                     tx_keys["vin"].append(obj)
                 else:
                     tx_keys["vin"].append({})
@@ -509,9 +509,9 @@ class BlockProcessor:
                          hashX + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
                 if txout.ok and txout.sk:
-                    tx_keys["vout"].append({'outputKey': txout.ok.hex(), 'spendingKey': txout.sk.hex()})
+                    tx_keys["vout"].append({'outputKey': txout.ok.reverse().hex(), 'spendingKey': txout.sk.reverse().hex()})
                 else:
-                    tx_keys["vout"].append({'script': txout.pk_script.hex()})
+                    tx_keys["vout"].append({'script': txout.pk_script.reverse().hex()})
 
                 spending = self.coin.get_spending_address(txout.pk_script)
                 voting = self.coin.get_voting_address(txout.pk_script)
