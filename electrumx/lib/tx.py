@@ -106,13 +106,14 @@ class TxOutput:
 
 @dataclass
 class TxOutputNavcoin:
-    __slots__ = 'value', 'pk_script', 'ek', 'ok', 'sk', 'tokenid', 'vdata'
+    __slots__ = 'value', 'pk_script', 'ek', 'ok', 'sk', 'tokenid', 'tokennftid', 'vdata'
     value: int
     pk_script: bytes
     ek: bytes
     ok: bytes
     sk: bytes
     tokenid: bytes
+    tokennftid: int
     vdata: bytes
 
     def serialize(self):
@@ -123,6 +124,7 @@ class TxOutputNavcoin:
             pack_varbytes(self.ok),
             pack_varbytes(self.sk),
             self.tokenid,
+            pack_le_int64(self.tokennftid),
             pack_varbytes(self.vdata),
         ))
 
@@ -615,6 +617,7 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
         ok = None
         sk = None
         tokenid = None
+        tokennftid = None
         vdata = None
         if value == -1:
             value = self._read_le_int64()
@@ -679,6 +682,8 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
             if flags & 0x1 << 5:
                 tokenid = self._read_nbytes(32)
             if flags & 0x1 << 6:
+                tokennftid = self._read_le_int64()
+            if flags & 0x1 << 7:
                 vdata = self._read_varbytes()
         return TxOutputNavcoin(
             value,  # value
@@ -687,6 +692,7 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
             ok,
             sk,
             tokenid,
+            tokennftid,
             vdata
         )
 
