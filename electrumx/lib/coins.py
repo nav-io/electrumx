@@ -3706,7 +3706,7 @@ class NavcoinTestnet(Navcoin):
     NET = 'testnet'
     RPC_PORT = 44445
     DESERIALIZER = lib_tx.DeserializerTxTimeSegWitNavCoin
-    GENESIS_HASH = ('00004a2a5a0a6bb4d01aed3942aa570a0ae3e4690a74a0f6772775b0cf44fc0e')
+    GENESIS_HASH = ('0000f8186df4648c46f445a25decd423fa6b62ed220849093f73f6f364116894')
 
 
 class Primecoin(PrimeChainPowMixin, Coin):
