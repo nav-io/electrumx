@@ -909,7 +909,6 @@ class SessionManager:
                 statehash_changed=statehash_changed,
                 dao=dao,
                 dao_complete=self.dao_complete,
-                candidates=self.candidates,
             )
             await self._task_group.spawn(coro)
 
@@ -1183,7 +1182,6 @@ class ElectrumX(SessionBase):
             statehash_changed: bool,
             dao: list,
             dao_complete: list,
-            candidates: list,
     ):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
@@ -1212,17 +1210,6 @@ class ElectrumX(SessionBase):
                 self.just_dao_subscribed = False
             elif statehash_changed:
                 for d in dao:
-                    args = (d, )
-                    await self.send_notification('blockchain.dao.subscribe', args)
-
-        if self.subscribe_candidates:
-            if self.just_candidates_subscribed:
-                for d in candidates_complete:
-                    args = (d, )
-                    await self.send_notification('blockchain.candidates.subscribe', args)
-                self.just_candidates_subscribed = False
-            elif candidates_changed:
-                for d in candidates:
                     args = (d, )
                     await self.send_notification('blockchain.dao.subscribe', args)
 
