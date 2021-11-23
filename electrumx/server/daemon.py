@@ -293,6 +293,10 @@ class Daemon:
         '''Return the transaction keys with the given hash.'''
         return await self._send_single('gettransactionkeys', (hex_hash, ))
 
+    async def resolvename(self, name):
+        '''Resolves a dotNav name.'''
+        return await self._send_single('resolvename', (name, ))
+
     async def listproposals(self, filter):
         return await self._send_single('listproposals',
                                        (filter, ))
@@ -306,6 +310,9 @@ class Daemon:
 
     async def getconsensusparameters(self, expanded):
         return await self._send_single('getconsensusparameters', (expanded, ))
+
+    async def viewaggregationsession(self, expanded):
+        return await self._send_single('viewaggregationsession', (expanded, ))
 
     async def getstakervote(self, script):
         return await self._send_single('getstakervote', (script, ))

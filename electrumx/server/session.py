@@ -908,7 +908,8 @@ class SessionManager:
                 consensus=consensus,
                 statehash_changed=statehash_changed,
                 dao=dao,
-                dao_complete=self.dao_complete
+                dao_complete=self.dao_complete,
+                candidates=self.candidates,
             )
             await self._task_group.spawn(coro)
 
@@ -1181,7 +1182,8 @@ class ElectrumX(SessionBase):
             consensus: list,
             statehash_changed: bool,
             dao: list,
-            dao_complete: list
+            dao_complete: list,
+            candidates: list,
     ):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
@@ -1210,6 +1212,17 @@ class ElectrumX(SessionBase):
                 self.just_dao_subscribed = False
             elif statehash_changed:
                 for d in dao:
+                    args = (d, )
+                    await self.send_notification('blockchain.dao.subscribe', args)
+
+        if self.subscribe_candidates:
+            if self.just_candidates_subscribed:
+                for d in candidates_complete:
+                    args = (d, )
+                    await self.send_notification('blockchain.candidates.subscribe', args)
+                self.just_candidates_subscribed = False
+            elif candidates_changed:
+                for d in candidates:
                     args = (d, )
                     await self.send_notification('blockchain.dao.subscribe', args)
 
@@ -1938,6 +1951,14 @@ class ElectrumX(SessionBase):
 
         return await self.daemon_request('gettransactionkeys', tx_hash_hex)
 
+    async def resolve_name(self, name):
+        '''Resolves a dotNav name
+
+        name: the name to resolve
+        '''
+
+        return await self.daemon_request('resolvename', name)
+
     async def staking_get_keys(self, spending_pkh):
         '''Return the staking keys of a spending pkh
 
@@ -2024,6 +2045,7 @@ class ElectrumX(SessionBase):
             'blockchain.transaction.get_keys': self.transaction_get_keys,
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
+            'blockchain.dotnav.resolve_name': self.resolve_name,
             'blockchain.listproposals': self.listproposals,
             'blockchain.listconsultations': self.listconsultations,
             'blockchain.getcfunddbstatehash': self.getcfunddbstatehash,
