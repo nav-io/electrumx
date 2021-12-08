@@ -297,6 +297,10 @@ class Daemon:
         '''Resolves a dotNav name.'''
         return await self._send_single('resolvename', (name, ))
 
+    async def gettoken(self, id):
+        '''Returns info from a token.'''
+        return await self._send_single('gettoken', (id, ))
+
     async def listproposals(self, filter):
         return await self._send_single('listproposals',
                                        (filter, ))
