@@ -1946,6 +1946,14 @@ class ElectrumX(SessionBase):
 
         return await self.daemon_request('resolvename', name)
 
+    async def get_token(self, id):
+        '''Returns token info
+
+        id: the token id
+        '''
+
+        return await self.daemon_request('gettoken', id)
+
     async def staking_get_keys(self, spending_pkh):
         '''Return the staking keys of a spending pkh
 
@@ -2033,6 +2041,7 @@ class ElectrumX(SessionBase):
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
             'blockchain.dotnav.resolve_name': self.resolve_name,
+            'blockchain.token.get_token': self.get_token,
             'blockchain.listproposals': self.listproposals,
             'blockchain.listconsultations': self.listconsultations,
             'blockchain.getcfunddbstatehash': self.getcfunddbstatehash,
