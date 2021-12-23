@@ -3578,14 +3578,12 @@ class Navcoin(Coin):
                     return False
             return True
 
-        ops = []
         try:
             ops = Script.get_ops(script)
-        except ScriptError:
-            return
-
-        if match(ops, ScriptPubKey.TO_PUBKEY_OPS):
-            script = ScriptPubKey.P2PKH_script(hash160(ops[0][-1]))
+            if match(ops, ScriptPubKey.TO_PUBKEY_OPS):
+                script = ScriptPubKey.P2PKH_script(hash160(ops[0][-1]))
+        except ScriptError as err:
+            pass
 
         return sha256(script).digest()[:HASHX_LEN]
 
