@@ -1938,13 +1938,13 @@ class ElectrumX(SessionBase):
 
         return await self.daemon_request('gettransactionkeys', tx_hash_hex)
 
-    async def resolve_name(self, name):
+    async def resolve_name(self, name, resolvesub):
         '''Resolves a dotNav name
 
         name: the name to resolve
         '''
 
-        return await self.daemon_request('resolvename', name)
+        return await self.daemon_request('resolvename', name, resolvesub)
 
     async def get_token(self, id):
         '''Returns token info
