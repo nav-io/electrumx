@@ -293,9 +293,9 @@ class Daemon:
         '''Return the transaction keys with the given hash.'''
         return await self._send_single('gettransactionkeys', (hex_hash, ))
 
-    async def resolvename(self, name):
+    async def resolvename(self, name, resolvesub):
         '''Resolves a dotNav name.'''
-        return await self._send_single('resolvename', (name, ))
+        return await self._send_single('resolvename', (name, resolvesub, ))
 
     async def gettoken(self, id):
         '''Returns info from a token.'''
