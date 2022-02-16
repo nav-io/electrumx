@@ -517,9 +517,6 @@ class MemPool:
         spender_txhash = self.txo_to_spender.get(prevout, None)
         spender_tx = self.txs.get(spender_txhash, None)
         if spender_tx is None:
-            self.logger.warning(f"spender_tx {hash_to_hex_str(spender_txhash)} not in"
-                                f"mempool, but txo_to_spender referenced it as spender "
-                                f"of {hash_to_hex_str(prev_txhash)}:{txout_idx} ?!")
             return TXOSpendStatus(prev_height=prev_height)
         spender_has_ui = any(hash in self.txs for hash, idx in spender_tx.prevouts)
         spender_height = -spender_has_ui
