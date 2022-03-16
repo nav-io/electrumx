@@ -1954,6 +1954,14 @@ class ElectrumX(SessionBase):
 
         return await self.daemon_request('gettoken', id)
 
+    async def get_nft(self, id, sub_id, get_utxo=False):
+        '''Returns token info
+
+        id: the token id
+        '''
+
+        return await self.daemon_request('getnft', id, sub_id, get_utxo)
+
     async def staking_get_keys(self, spending_pkh):
         '''Return the staking keys of a spending pkh
 

@@ -301,6 +301,10 @@ class Daemon:
         '''Returns info from a token.'''
         return await self._send_single('gettoken', (id, ))
 
+    async def getnft(self, id, subid, get_utxo=False):
+        '''Returns info from a token.'''
+        return await self._send_single('getnft', (id, subid, get_utxo, ))
+
     async def listproposals(self, filter):
         return await self._send_single('listproposals',
                                        (filter, ))
