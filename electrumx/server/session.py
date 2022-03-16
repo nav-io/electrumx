@@ -2050,6 +2050,7 @@ class ElectrumX(SessionBase):
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
             'blockchain.dotnav.resolve_name': self.resolve_name,
             'blockchain.token.get_token': self.get_token,
+            'blockchain.token.get_nft': self.get_nft,
             'blockchain.listproposals': self.listproposals,
             'blockchain.listconsultations': self.listconsultations,
             'blockchain.getcfunddbstatehash': self.getcfunddbstatehash,
