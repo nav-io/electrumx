@@ -477,14 +477,18 @@ class BlockProcessor:
                     continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
-                append_hashX(cache_value[:HASHX_LEN])
                 prevout_tuple = (txin.prev_hash, txin.prev_idx)
                 put_txo_to_spender_map(prevout_tuple, tx_hash)
                 add_touched_outpoint(prevout_tuple)
                 prevTx = self.db.read_raw_tx(txin.prev_hash)
                 if isinstance(prevTx, bytes):
                     prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
+
+                    if prevOut.pk_script.hex() == "51" or prevOut.tokenid == bytes(32):
+                        append_hashX(cache_value[:HASHX_LEN])
+
                     obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
+
                     if prevOut.pk_script.hex() == "51" and prevOut.ok is not None and prevOut.sk is not None:
                         obj['outputKey'] = prevOut.ok.hex()
                         obj['spendingKey'] = prevOut.sk.hex()
@@ -492,6 +496,7 @@ class BlockProcessor:
                         obj['script'] = prevOut.pk_script.hex()
                     tx_keys["vin"].append(obj)
                 else:
+                    append_hashX(cache_value[:HASHX_LEN])
                     tx_keys["vin"].append({})
                     continue
 
@@ -504,8 +509,9 @@ class BlockProcessor:
 
                 # Get the hashX
                 hashX = script_hashX(txout.pk_script)
-                append_hashX(hashX)
-                put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
+                if txout.pk_script.hex() == "51" or txout.tokenid == bytes(32):
+                    append_hashX(hashX)
+                    put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
                          hashX + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
                 if txout.pk_script.hex() == "51" and txout.ok is not None and txout.sk is not None:
