@@ -484,7 +484,7 @@ class BlockProcessor:
                 if isinstance(prevTx, bytes):
                     prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
 
-                    if prevOut.pk_script.hex() == "51" or prevOut.tokenid == bytes(32):
+                    if prevOut.pk_script.hex() == "51" or prevOut.tokenid == bytes(32) or txout.tokenid is None:
                         append_hashX(cache_value[:HASHX_LEN])
 
                     obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
@@ -509,10 +509,13 @@ class BlockProcessor:
 
                 # Get the hashX
                 hashX = script_hashX(txout.pk_script)
-                if txout.pk_script.hex() == "51" or txout.tokenid == bytes(32):
+                if txout.pk_script.hex() == "51" or txout.tokenid == bytes(32) or txout.tokenid is None:
                     append_hashX(hashX)
                     put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
-                         hashX + tx_numb + to_le_uint64(txout.value))
+                        hashX + tx_numb + to_le_uint64(txout.value))
+                else:
+                    put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
+                             script_hashX(b'') + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
                 if txout.pk_script.hex() == "51" and txout.ok is not None and txout.sk is not None:
                     tx_keys["vout"].append({'outputKey': txout.ok.hex(), 'spendingKey': txout.sk.hex()})
