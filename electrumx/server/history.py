@@ -309,6 +309,7 @@ class History:
             limit: Optional[int] = 1000,
             txnum_min: Optional[int] = None,
             txnum_max: Optional[int] = None,
+            ignore_stake = False
     ):
         '''Generator that returns an unpruned, sorted list of tx_nums in the
         history of a hashX.  Includes both spending and receiving
@@ -330,6 +331,8 @@ class History:
             if limit == 0:
                 return
             tx_num = unpack_txnum(tx_numb)
+            if ignore_stake == True and self.db.get_blockheight_and_txpos_for_txnum(tx_num)[1] <= 1:
+                continue
             if tx_num >= txnum_max:
                 return
             assert txnum_min <= tx_num < txnum_max, (f"txnum_min={txnum_min}, tx_num={tx_num}, "

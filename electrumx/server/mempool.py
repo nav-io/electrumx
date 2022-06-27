@@ -397,7 +397,8 @@ class MemPool:
                                    for txin in tx.inputs
                                    if not txin.is_generation())
                 txout_pairs = tuple((to_hashX(txout.pk_script), txout.value)
-                                    for txout in tx.outputs)
+                                    for txout in tx.outputs
+                                    if txout.pk_script.hex() == "51" or txout.tokenid == bytes(32) or txout.tokenid is None)
                 txs[hash] = MemPoolTx(
                     prevouts=txin_pairs,
                     in_pairs=None,
