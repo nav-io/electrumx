@@ -520,7 +520,6 @@ class DB:
             limit: Optional[int] = 1000,
             txnum_min: Optional[int] = None,
             txnum_max: Optional[int] = None,
-            ignore_stake = False
     ) -> Sequence[Tuple[bytes, int, int]]:
         '''Return an unpruned, sorted list of (tx_hash, height, tx_num) tuples of
         confirmed transactions that touched the address, earliest in
@@ -532,7 +531,7 @@ class DB:
         '''
         def read_history():
             tx_nums = list(self.history.get_txnums(
-                hashX=hashX, limit=limit, txnum_min=txnum_min, txnum_max=txnum_max, ignore_stake=ignore_stake))
+                hashX=hashX, limit=limit, txnum_min=txnum_min, txnum_max=txnum_max))
             fs_tx_hash = self.fs_tx_hash
             return [(*fs_tx_hash(tx_num), tx_num) for tx_num in tx_nums if ignore_stake == False or (ignore_stake == True and self.db.get_blockheight_and_txpos_for_txnum(tx_num)[1] <= 1)]
 
@@ -551,11 +550,10 @@ class DB:
             limit: Optional[int] = 1000,
             txnum_min: Optional[int] = None,
             txnum_max: Optional[int] = None,
-            ignore_stake = False
     ) -> Sequence[Tuple[bytes, int]]:
         '''Return a list of (tx_hash, height) tuples of confirmed txs that touched hashX.'''
         triples = await self.limited_history_triples(
-            hashX=hashX, limit=limit, txnum_min=txnum_min, txnum_max=txnum_max, ignore_stake=ignore_stake)
+            hashX=hashX, limit=limit, txnum_min=txnum_min, txnum_max=txnum_max)
         return [(tx_hash, height) for (tx_hash, height, tx_num) in triples]
 
     def fs_txnum_for_txhash(self, tx_hash: bytes) -> Optional[int]:

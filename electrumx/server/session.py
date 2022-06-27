@@ -1515,8 +1515,7 @@ class ElectrumX(SessionBase):
             from_height=0,
             to_height=-1,
             client_statushash=None,
-            client_height=None,
-            ignore_stake=False
+            client_height=None
     ):
         '''Return the confirmed and unconfirmed history of a scripthash,
         as per protocol newer than >=1.5.
@@ -1568,7 +1567,6 @@ class ElectrumX(SessionBase):
                 limit=limit_nconf,
                 txnum_min=txnum_min,
                 txnum_max=txnum_max,
-                ignore_stake=ignore_stake
             )
         else:
             db_history = []
