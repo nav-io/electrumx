@@ -533,7 +533,7 @@ class DB:
             tx_nums = list(self.history.get_txnums(
                 hashX=hashX, limit=limit, txnum_min=txnum_min, txnum_max=txnum_max))
             fs_tx_hash = self.fs_tx_hash
-            return [(*fs_tx_hash(tx_num), tx_num) for tx_num in tx_nums if ignore_stake == False or (ignore_stake == True and self.db.get_blockheight_and_txpos_for_txnum(tx_num)[1] <= 1)]
+            return [(*fs_tx_hash(tx_num), tx_num) for tx_num in tx_nums]
 
         while True:
             history = await run_in_thread(read_history)
