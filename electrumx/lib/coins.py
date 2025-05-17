@@ -3569,8 +3569,8 @@ class Navio(Coin):
         '''Return a Block namedtuple given a raw block and its height.'''
         header = cls.block_header(raw_block, height)
         if struct.unpack(">I", header[:4])[0] & 0x01000000:
-            cls.DESERIALIZER(raw_block, start=len(header)).read_pos_proof()
-        txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
+            self.DESERIALIZER(raw_block, start=len(header)).read_pos_proof()
+        txs = self.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
         return Block(raw_block, header, txs)
 
 
