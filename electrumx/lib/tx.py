@@ -177,7 +177,7 @@ class TxOutputNavio:
         if self.value > 0 and ((self.tokenid and not all(b == 0 for b in self.tokenid) and self.tokennftid != 0x7fffffff) or (self.vdata and len(self.vdata) > 0)):
             flags |= 0x1 << 3
 
-        let bytes = []
+        bytes = []
         if flags == 0:
             bytes.append(pack_le_int64(self.value))
         else:
