@@ -489,8 +489,8 @@ class BlockProcessor:
 
                     obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
 
-                    if prevOut.pk_script.hex() == "51" and prevOut.ok is not None and prevOut.sk is not None:
-                        obj['outputKey'] = prevOut.ok.hex()
+                    if prevOut.pk_script.hex() == "51" and prevOut.ek is not None and prevOut.sk is not None:
+                        obj['outputKey'] = prevOut.ek.hex()
                         obj['spendingKey'] = prevOut.sk.hex()
                     else:
                         obj['script'] = prevOut.pk_script.hex()
@@ -517,17 +517,10 @@ class BlockProcessor:
                     put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
                              script_hashX(b'') + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
-                if txout.pk_script.hex() == "51" and txout.ok is not None and txout.sk is not None:
-                    tx_keys["vout"].append({'outputKey': txout.ok.hex(), 'spendingKey': txout.sk.hex()})
+                if txout.pk_script.hex() == "51" and txout.ek is not None and txout.sk is not None:
+                    tx_keys["vout"].append({'outputKey': txout.ek.hex(), 'spendingKey': txout.sk.hex()})
                 else:
                     tx_keys["vout"].append({'script': txout.pk_script.hex()})
-
-                spending = self.coin.get_spending_address(txout.pk_script)
-                voting = self.coin.get_voting_address(txout.pk_script)
-                staking = self.coin.get_staking_address(txout.pk_script)
-
-                if staking is not None:
-                    self.db.write_staking_keys(spending, staking, voting)
 
             self.db.write_tx_keys(tx_keys, tx_hash)
 

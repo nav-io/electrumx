@@ -105,28 +105,95 @@ class TxOutput:
         ))
 
 @dataclass
-class TxOutputNavcoin:
-    __slots__ = 'value', 'pk_script', 'ek', 'ok', 'sk', 'tokenid', 'tokennftid', 'vdata'
+class RangeProofNavio:
+    __slots__ = 'Vs', 'Ls', 'Rs', 'A', 'A_wip', 'B', 'r_prime', 's_prime', 'delta_prime', 'alpha_hat', 'tau_x'
+
+    Vs: bytes[]
+    Ls: bytes[]
+    Rs: bytes[]
+    A: bytes
+    A_wip: bytes
+    B: bytes
+    r_prime: bytes
+    s_prime: bytes
+    delta_prime: bytes
+    alpha_hat: bytes
+    tau_x: bytes
+
+    def serialize(self):
+        return b''.join((
+            pack_varint(len(self.Vs)),
+            pack_varbytes(self.Vs),
+            pack_varint(len(self.Ls)),
+            pack_varbytes(self.Ls),
+            pack_varint(len(self.Rs)),
+            pack_varbytes(self.Rs),
+            pack_varbytes(self.A),
+            pack_varbytes(self.A_wip),
+            pack_varbytes(self.B),
+            pack_varbytes(self.r_prime),
+            pack_varbytes(self.s_prime),
+            pack_varbytes(self.delta_prime),
+            pack_varbytes(self.alpha_hat),
+            pack_varbytes(self.tau_x),
+        ))
+
+
+@dataclass
+class TxBlsctDataNavio:
+    __slots__ = 'sk', 'ek', 'bk', 'range_proof', 'view_tag'
+    sk: bytes
+    ek: bytes
+    bk: bytes
+    range_proof: RangeProofNavio
+    view_tag: int
+
+    def serialize(self):
+        return b''.join((
+            pack_varbytes(self.sk),
+            pack_varbytes(self.ek),
+            pack_varbytes(self.bk),
+            self.range_proof.serialize(),
+        ))
+
+@dataclass
+class TxOutputNavio:
+    __slots__ = 'value', 'pk_script', 'blsct_data', 'tokenid', 'tokennftid', 'vdata'
     value: int
     pk_script: bytes
-    ek: bytes
-    ok: bytes
-    sk: bytes
+    blsct_data: TxBlsctDataNavio
     tokenid: bytes
     tokennftid: int
     vdata: bytes
 
     def serialize(self):
-        return b''.join((
-            pack_le_int64(self.value),
-            pack_varbytes(self.pk_script),
-            pack_varbytes(self.ek),
-            pack_varbytes(self.ok),
-            pack_varbytes(self.sk),
-            self.tokenid,
-            pack_le_int64(self.tokennftid),
-            pack_varbytes(self.vdata),
-        ))
+        flags = 0
+        if len(self.blsct_data.range_proof.Vs) > 0:
+            flags |= 0x1 << 0
+        if self.tokenid and not all(b == 0 for b in self.tokenid):
+            flags |= 0x1 << 1
+        if self.vdata and len(self.vdata) > 0:
+            flags |= 0x1 << 2
+        if self.value > 0 and ((self.tokenid and not all(b == 0 for b in self.tokenid) and self.tokennftid != 0x7fffffff) or (self.vdata and len(self.vdata) > 0)):
+            flags |= 0x1 << 3
+
+        let bytes = []
+        if flags == 0:
+            bytes.append(pack_le_int64(self.value))
+        else:
+            bytes.append(pack_le_int64(0x7fffffff))
+            bytes.append(pack_le_int64(flags))
+            if flags & 0x1 << 3:
+                bytes.append(pack_le_int64(self.value))
+        bytes.append(pack_varbytes(self.pk_script))
+        if flags & 0x1 << 0:
+            bytes.append(self.blsct_data.serialize())
+        if flags & 0x1 << 1:
+            bytes.append(self.tokenid)
+            bytes.append(pack_le_int64(self.tokennftid))
+        if flags & 0x1 << 2:
+            bytes.append(pack_varbytes(self.vdata))
+        return b''.join(bytes)
 
 
 @dataclass
@@ -598,7 +665,7 @@ class DeserializerTxTimeSegWit(DeserializerTxTime):
         return tx, vsize
 
 
-class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
+class DeserializerTxNavio(TxSegWit):
     def _read_witness(self, fields):
         read_witness_field = self._read_witness_field
         return [read_witness_field() for _ in range(fields)]
@@ -611,86 +678,36 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
         read_output = self._read_output
         return [read_output() for i in range(self._read_varint())]
 
+    def _read_blsct_data(self):
+        range_proof = self.read_pos_proof()
+        sk = self.read_point()
+        bk = self.read_point()
+        ek = self.read_point()
+        view_tag = self._read_be_uint16()   
+        return BLSCTData(range_proof, sk, ek, bk, view_tag)
+
     def _read_output(self):
         value = self._read_le_int64()
-        ek = None
-        ok = None
-        sk = None
+        blsct_data = None
         tokenid = None
         tokennftid = None
         vdata = None
-        if value == -1:
-            value = self._read_le_int64()
-            ek = self._read_varbytes()
-            ok = self._read_varbytes()
-            sk = self._read_varbytes()
-            v_count = self._read_varint()
-            v = []
-            for i in range(v_count):
-                v.append(self._read_varbytes())
-            l = []
-            l_count = self._read_varint()
-            for i in range(l_count):
-                l.append(self._read_varbytes())
-            r = []
-            r_count = self._read_varint()
-            for i in range(r_count):
-                r.append(self._read_varbytes())
-            A = self._read_varbytes()
-            S = self._read_varbytes()
-            T1 = self._read_varbytes()
-            T2 = self._read_varbytes()
-            taux = self._read_varbytes()
-            mu = self._read_varbytes()
-            a = self._read_varbytes()
-            b = self._read_varbytes()
-            t = self._read_varbytes()
-        elif value & 0x2<<62:
-            flags = value
-            if flags & 0x1<<0:
-                value = self._read_le_int64()
-            else:
-                value = 0
-            if flags & 0x1 << 1:
-                ek = self._read_varbytes()
-            if flags & 0x1 << 2:
-                ok = self._read_varbytes()
+        script = None
+        if value == 0x7FFFFFFFFFFFFFFF:
             if flags & 0x1 << 3:
-                sk = self._read_varbytes()
-            if flags & 0x1 << 4:
-                v_count = self._read_varint()
-                v = []
-                for i in range(v_count):
-                    v.append(self._read_varbytes())
-                l = []
-                l_count = self._read_varint()
-                for i in range(l_count):
-                    l.append(self._read_varbytes())
-                r = []
-                r_count = self._read_varint()
-                for i in range(r_count):
-                    r.append(self._read_varbytes())
-                A = self._read_varbytes()
-                S = self._read_varbytes()
-                T1 = self._read_varbytes()
-                T2 = self._read_varbytes()
-                taux = self._read_varbytes()
-                mu = self._read_varbytes()
-                a = self._read_varbytes()
-                b = self._read_varbytes()
-                t = self._read_varbytes()
-            if flags & 0x1 << 5:
+                value = self._read_le_int64()
+            script = self._read_varbytes()
+            if flags & 0x1 << 0:
+                blsct_data = self._read_blsct_data()
+            if flags & 0x1 << 1:
                 tokenid = self._read_nbytes(32)
-            if flags & 0x1 << 6:
                 tokennftid = self._read_le_int64()
-            if flags & 0x1 << 7:
+            if flags & 0x1 << 2:
                 vdata = self._read_varbytes()
-        return TxOutputNavcoin(
+        return TxOutputNavio(
             value,  # value
-            self._read_varbytes(),  # pk_script
-            ek,
-            ok,
-            sk,
+            script,  # pk_script
+            blsct_data,
             tokenid,
             tokennftid,
             vdata
@@ -699,7 +716,6 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
 
     def read_tx_no_segwit(self, start):
         version = self._read_le_int32()
-        time = self._read_le_uint32()
         inputs = self._read_inputs()
         outputs = self._read_outputs()
         locktime = self._read_le_uint32()
@@ -729,7 +745,6 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
             return tx, tx_hash, self.binary_length
 
         version = self._read_le_int32()
-        time = self._read_le_uint32()
         orig_ser = self.binary[start:self.cursor]
 
         marker = self._read_byte()
@@ -745,16 +760,12 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
 
         start = self.cursor
         locktime = self._read_le_uint32()
-        strDZeel = ""
-
-        if version >= 2:
-            strDZeel = self._read_varbytes()
 
         vsize = (3 * base_size + self.binary_length) // 4
         orig_ser += self.binary[start:self.cursor]
 
-        return TxTimeSegWit(
-            version, time, marker, flag, inputs, outputs, witness, locktime, orig_ser),\
+        return TxSegWit(
+            version, marker, flag, inputs, outputs, witness, locktime, orig_ser),\
             self.TX_HASH_FN(orig_ser), vsize
 
     def read_tx(self):
@@ -767,6 +778,77 @@ class DeserializerTxTimeSegWitNavCoin(DeserializerTxTime):
     def read_tx_and_vsize(self):
         tx, tx_hash, vsize = self._read_tx_parts()
         return tx, vsize
+
+    def read_point(self):
+        return self._read_nbytes(48)
+
+    def read_scalar(self):
+        return self._read_nbytes(32)
+
+    def read_points(self):
+        points = []
+        for i in range(self._read_varint()):
+            points.append(self.read_point())
+        return points
+
+    def read_scalars(self):
+        scalars = []
+        for i in range(self._read_varint()):
+            scalars.append(self.read_scalar())
+        return scalars
+
+    def read_set_mem_proof(self):
+        self.read_point()
+        self.read_point()
+        self.read_point()
+        self.read_point()
+        self.read_point()
+        self.read_point()
+        self.read_point()
+        self.read_point()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_points()
+        self.read_points()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+
+    def read_pos_proof(self):
+        Vs = self.read_points()
+        if len(Vs) > 0:
+            Ls = self.read_points()
+            Rs = self.read_points()
+        A = self.read_point()
+        A_wip = self.read_point()
+        B = self.read_point()
+        r_prime = self.read_scalar()
+        s_prime = self.read_scalar()
+        delta_prime = self.read_scalar()
+        alpha_hat = self.read_scalar()
+        tau_x = self.read_scalar()
+
+        return RangeProofNavio(Vs, Ls, Rs, A, A_wip, B, r_prime, s_prime, delta_prime, alpha_hat, tau_x, tau_y, mu)
+
+    def read_pos_proof_without_v(self):
+        self.read_points()
+        self.read_points()
+        self.read_point()
+        self.read_point()
+        self.read_point()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+        self.read_scalar()
+
+    def read_pos_proof(self):
+        self.read_set_mem_proof()
+        self.read_pos_proof_without_v()
 
 
 @dataclass

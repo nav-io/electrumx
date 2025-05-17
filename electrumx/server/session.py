@@ -1962,23 +1962,6 @@ class ElectrumX(SessionBase):
 
         return await self.daemon_request('getnft', id, sub_id, get_utxo)
 
-    async def staking_get_keys(self, spending_pkh):
-        '''Return the staking keys of a spending pkh
-
-        spending_pkh: the spending pkh as a hexadecimal string
-        '''
-        spending_pkh_bytes = assert_hash(spending_pkh)
-        del spending_pkh
-
-        try:
-            tx = self.db.read_staking_keys(spending_pkh_bytes)
-            if tx is not None:
-                return tx
-        finally:
-            pass
-
-        return []
-
     async def transaction_merkle(self, tx_hash, height=None):
         '''Return the merkle branch to a confirmed transaction given its hash
         and height.
@@ -2042,7 +2025,6 @@ class ElectrumX(SessionBase):
             'blockchain.scripthash.get_mempool': self.scripthash_get_mempool,
             'blockchain.scripthash.listunspent': self.scripthash_listunspent,
             'blockchain.scripthash.subscribe': self.scripthash_subscribe,
-            'blockchain.staking.get_keys': self.staking_get_keys,
             'blockchain.transaction.broadcast': self.transaction_broadcast,
             'blockchain.transaction.get': self.transaction_get,
             'blockchain.transaction.get_keys': self.transaction_get_keys,

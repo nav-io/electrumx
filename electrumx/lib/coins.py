@@ -3538,8 +3538,8 @@ class Myce(Coin):
             return double_sha256(header)
 
 
-class Navcoin(Coin):
-    NAME = "Navcoin"
+class Navio(Coin):
+    NAME = "Navio"
     SHORTNAME = "NAV"
     NET = "mainnet"
     XPUB_VERBYTES = bytes.fromhex("0488b21e")
@@ -3549,7 +3549,7 @@ class Navcoin(Coin):
     WIF_BYTE = bytes.fromhex("96")
     GENESIS_HASH = ('00006a4e3e18c71c6d48ad6c261e2254'
                     'fa764cf29607a4357c99b712dfbb8e6a')
-    DESERIALIZER = lib_tx.DeserializerTxTimeSegWitNavCoin
+    DESERIALIZER = lib_tx.DeserializerTxNavio
     TX_COUNT = 137641
     TX_COUNT_HEIGHT = 3649662
     TX_PER_BLOCK = 2
@@ -3565,146 +3565,25 @@ class Navcoin(Coin):
             return x13_hash.getPoWHash(header)
 
     @classmethod
-    def hashX_from_script(cls, script):
-        '''Returns a hashX from a script. Patch for P2PK outputs'''
-        def match(ops, pattern):
-            if len(ops) != len(pattern):
-                return False
-            for op, pop in zip(ops, pattern):
-                if pop != op:
-                    # -1 means 'data push', whose op is an (op, data) tuple
-                    if pop == -1 and isinstance(op, tuple):
-                        continue
-                    return False
-            return True
-
-        try:
-            ops = Script.get_ops(script)
-            if match(ops, ScriptPubKey.TO_PUBKEY_OPS):
-                script = ScriptPubKey.P2PKH_script(hash160(ops[0][-1]))
-        except ScriptError as err:
-            pass
-
-        return sha256(script).digest()[:HASHX_LEN]
-
-    @classmethod
-    def get_staking_address(cls, script):
-        '''Returns a hashX from a script. Patch for P2PK outputs'''
-        def match(ops, pattern):
-            if len(ops) != len(pattern):
-                return False
-            for op, pop in zip(ops, pattern):
-                if pop != op:
-                    # -1 means 'data push', whose op is an (op, data) tuple
-                    if pop == -1 and isinstance(op, tuple):
-                        continue
-                    return False
-            return True
-
-        ops = []
-        try:
-            ops = Script.get_ops(script)
-        except ScriptError:
-            return
-
-        if match(ops, ScriptPubKey.TO_P2CS_OPS):
-            return ops[4][-1]
-
-        if match(ops, ScriptPubKey.TO_P2CS2_OPS):
-            return ops[6][-1]
-
-        return
-
-    @classmethod
-    def get_spending_address(cls, script):
-        '''Returns a hashX from a script. Patch for P2PK outputs'''
-        def match(ops, pattern):
-            if len(ops) != len(pattern):
-                return False
-            for op, pop in zip(ops, pattern):
-                if pop != op:
-                    # -1 means 'data push', whose op is an (op, data) tuple
-                    if pop == -1 and isinstance(op, tuple):
-                        continue
-                    return False
-            return True
-
-        ops = []
-        try:
-            ops = Script.get_ops(script)
-        except ScriptError:
-            return
-
-        if match(ops, ScriptPubKey.TO_P2CS_OPS):
-            return ops[10][-1]
-
-        if match(ops, ScriptPubKey.TO_P2CS2_OPS):
-            return ops[12][-1]
-
-        return
-
-    @classmethod
-    def get_voting_address(cls, script):
-        '''Returns a hashX from a script. Patch for P2PK outputs'''
-
-        def match(ops, pattern):
-            if len(ops) != len(pattern):
-                return False
-            for op, pop in zip(ops, pattern):
-                if pop != op:
-                    # -1 means 'data push', whose op is an (op, data) tuple
-                    if pop == -1 and isinstance(op, tuple):
-                        continue
-                    return False
-            return True
-
-        ops = []
-        try:
-            ops = Script.get_ops(script)
-        except ScriptError:
-            return
-
-        if match(ops, ScriptPubKey.TO_P2CS2_OPS):
-            return ops[0][-1]
-
-        return
-
-    @classmethod
-    def hashX_from_script(cls, script):
-        '''Returns a hashX from a script.'''
-        def match(ops, pattern):
-            if len(ops) != len(pattern):
-                return False
-            for op, pop in zip(ops, pattern):
-                if pop != op:
-                    # -1 means 'data push', whose op is an (op, data) tuple
-                    if pop == -1 and isinstance(op, tuple):
-                        continue
-                    return False
-            return True
-
-        ops = []
-        try:
-            ops = Script.get_ops(script)
-        except ScriptError:
-            return
-
-        if match(ops, ScriptPubKey.TO_PUBKEY_OPS):
-            script = ScriptPubKey.P2PKH_script(hash160(ops[0][-1]))
-
-        return sha256(script).digest()[:HASHX_LEN]
+    def block(cls, raw_block, height):
+        '''Return a Block namedtuple given a raw block and its height.'''
+        header = cls.block_header(raw_block, height)
+        if header[:4] & 0x01000000:
+            cls.DESERIALIZER(raw_block, start=len(header)).read_pos_proof()
+        txs = cls.DESERIALIZER(raw_block, start=len(header)).read_tx_block()
+        return Block(raw_block, header, txs)
 
 
-class NavcoinTestnet(Navcoin):
+class NavioTestnet(Navio):
     SHORTNAME = "TNAV"
     P2PKH_VERBYTE = bytes.fromhex("6F")
     P2SH_VERBYTES = [bytes.fromhex("C4")]
     TX_COUNT = 0
     TX_COUNT_HEIGHT = 1
     NET = 'testnet'
-    RPC_PORT = 44445
-    DESERIALIZER = lib_tx.DeserializerTxTimeSegWitNavCoin
-    GENESIS_HASH = ('0000f8186df4648c46f445a25decd423fa6b62ed220849093f73f6f364116894')
+    RPC_PORT = 33577
+    DESERIALIZER = lib_tx.DeserializerTxNavio
+    GENESIS_HASH = ('7503411ece6b8da29e0855013e0bbeb6738e3fdcc5c0157e9a103a98a2ca2386')
 
 
 class Primecoin(PrimeChainPowMixin, Coin):
