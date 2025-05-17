@@ -108,9 +108,9 @@ class TxOutput:
 class RangeProofNavio:
     __slots__ = 'Vs', 'Ls', 'Rs', 'A', 'A_wip', 'B', 'r_prime', 's_prime', 'delta_prime', 'alpha_hat', 'tau_x'
 
-    Vs: bytes[]
-    Ls: bytes[]
-    Rs: bytes[]
+    Vs: Sequence[bytes]
+    Ls: Sequence[bytes]
+    Rs: Sequence[bytes]
     A: bytes
     A_wip: bytes
     B: bytes
@@ -832,7 +832,7 @@ class DeserializerTxNavio(TxSegWit):
         alpha_hat = self.read_scalar()
         tau_x = self.read_scalar()
 
-        return RangeProofNavio(Vs, Ls, Rs, A, A_wip, B, r_prime, s_prime, delta_prime, alpha_hat, tau_x, tau_y, mu)
+        return RangeProofNavio(Vs, Ls, Rs, A, A_wip, B, r_prime, s_prime, delta_prime, alpha_hat, tau_x)
 
     def read_pos_proof_without_v(self):
         self.read_points()
