@@ -765,7 +765,7 @@ class DeserializerTxNavio(DeserializerSegWit):
         orig_ser += self.binary[start:self.cursor]
 
         return TxSegWit(
-            version, marker, flag, inputs, outputs, witness, locktime, orig_ser),\
+            version, marker, flag, inputs, outputs, witness, locktime),\
             self.TX_HASH_FN(orig_ser), vsize
 
     def read_tx(self):
