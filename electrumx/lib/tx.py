@@ -665,7 +665,7 @@ class DeserializerTxTimeSegWit(DeserializerTxTime):
         return tx, vsize
 
 
-class DeserializerTxNavio(TxSegWit):
+class DeserializerTxNavio(DeserializerSegWit):
     def _read_witness(self, fields):
         read_witness_field = self._read_witness_field
         return [read_witness_field() for _ in range(fields)]
