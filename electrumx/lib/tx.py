@@ -380,6 +380,7 @@ class DeserializerTxNavio(Deserializer):
         vdata = None
         script = None
         if value == 0x7FFFFFFFFFFFFFFF:
+            flags = self._read_le_int64()
             if flags & 0x1 << 3:
                 value = self._read_le_int64()
             script = self._read_varbytes()
