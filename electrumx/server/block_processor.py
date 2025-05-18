@@ -489,9 +489,9 @@ class BlockProcessor:
 
                     obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
 
-                    if prevOut.pk_script.hex() == "51" and prevOut.ek is not None and prevOut.sk is not None:
-                        obj['outputKey'] = prevOut.ek.hex()
-                        obj['spendingKey'] = prevOut.sk.hex()
+                    if prevOut.pk_script.hex() == "51" and prevOut.blsct_data.ek is not None and prevOut.blsct_data.sk is not None:
+                        obj['outputKey'] = prevOut.blsct_data.ek.hex()
+                        obj['spendingKey'] = prevOut.blsct_data.sk.hex()
                     else:
                         obj['script'] = prevOut.pk_script.hex()
                     tx_keys["vin"].append(obj)
@@ -517,8 +517,8 @@ class BlockProcessor:
                     put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
                              script_hashX(b'') + tx_numb + to_le_uint64(txout.value))
                 add_touched_outpoint((tx_hash, idx))
-                if txout.pk_script.hex() == "51" and txout.ek is not None and txout.sk is not None:
-                    tx_keys["vout"].append({'outputKey': txout.ek.hex(), 'spendingKey': txout.sk.hex()})
+                if txout.pk_script.hex() == "51" and txout.blsct_data.ek is not None and txout.blsct_data.sk is not None:
+                    tx_keys["vout"].append({'outputKey': txout.blsct_data.ek.hex(), 'spendingKey': txout.blsct_data.sk.hex()})
                 else:
                     tx_keys["vout"].append({'script': txout.pk_script.hex()})
 
