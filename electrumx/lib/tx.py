@@ -374,23 +374,23 @@ class DeserializerTxNavio(Deserializer):
 
     def _read_output(self):
         value = self._read_le_int64()
-        blsct_data = None
-        tokenid = None
-        tokennftid = None
-        vdata = None
+        blsct_data = TxBlsctDataNavio(RangeProofNavio(b'', b'', b'', b'', b'', b'', b'', b'', b'', b'', b''), b'', b'', b'', 0)
+        tokenid = b''
+        tokennftid = 0
+        vdata = b''
         script = b''
         if value == 0x7FFFFFFFFFFFFFFF:
             flags = self._read_le_int64()
             if flags & 0x1 << 3:
                 value = self._read_le_int64()
-            script = self._read_varbytes()
-            if flags & 0x1 << 0:
-                blsct_data = self._read_blsct_data()
-            if flags & 0x1 << 1:
-                tokenid = self._read_nbytes(32)
-                tokennftid = self._read_le_int64()
-            if flags & 0x1 << 2:
-                vdata = self._read_varbytes()
+        script = self._read_varbytes()
+        if flags & 0x1 << 0:
+            blsct_data = self._read_blsct_data()
+        if flags & 0x1 << 1:
+            tokenid = self._read_nbytes(32)
+            tokennftid = self._read_le_int64()
+        if flags & 0x1 << 2:
+            vdata = self._read_varbytes()
         return TxOutputNavio(
             value,  # value
             script,  # pk_script
@@ -406,8 +406,8 @@ class DeserializerTxNavio(Deserializer):
         inputs = self._read_inputs()
         outputs = self._read_outputs()
         locktime = self._read_le_uint32()
-        txsig = None
-        if version & 1:
+        txsig = b''
+        if version & 1 << 5:
             txsig = self._read_nbytes(96)
         return TxNavio(
             version,
@@ -444,8 +444,8 @@ class DeserializerTxNavio(Deserializer):
         start = self.cursor
         locktime = self._read_le_uint32()
 
-        txsig = None
-        if version & 1:
+        txsig = b''
+        if version & 1 << 5:
             txsig = self._read_nbytes(96)
 
         vsize = (3 * base_size + self.binary_length) // 4
@@ -491,25 +491,25 @@ class DeserializerTxNavio(Deserializer):
         return scalars
 
     def read_set_mem_proof(self):
-        self.read_point()
-        self.read_point()
-        self.read_point()
-        self.read_point()
-        self.read_point()
-        self.read_point()
-        self.read_point()
-        self.read_point()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_points()
-        self.read_points()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
+        phi = self.read_point()
+        A1 = self.read_point()
+        A2 = self.read_point()
+        S1 = self.read_point()
+        S2 = self.read_point()
+        S3 = self.read_point()
+        T1 = self.read_point()
+        T2 = self.read_point()
+        tau_x = self.read_scalar()
+        mu = self.read_scalar()
+        z_alpha = self.read_scalar()
+        z_tau = self.read_scalar()
+        z_beta = self.read_scalar()
+        t = self.read_scalar()
+        Ls = self.read_points()
+        Rs = self.read_points()
+        a = self.read_scalar()
+        b =self.read_scalar()
+        omega = self.read_scalar()
 
     def read_range_proof(self):
         Vs = self.read_points()
@@ -528,17 +528,20 @@ class DeserializerTxNavio(Deserializer):
         return RangeProofNavio(Vs, Ls, Rs, A, A_wip, B, r_prime, s_prime, delta_prime, alpha_hat, tau_x)
 
     def read_range_proof_without_v(self):
-        self.read_points()
-        self.read_points()
-        self.read_point()
-        self.read_point()
-        self.read_point()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
-        self.read_scalar()
+        Ls = self.read_points()
+        Rs = self.read_points()
+        A = self.read_point()
+        A_wip = self.read_point()
+        B = self.read_point()
+        r_prime = self.read_scalar()
+        s_prime = self.read_scalar()
+        delta_prime = self.read_scalar()
+        alpha_hat = self.read_scalar()
+        tau_x = self.read_scalar()
+
 
     def read_pos_proof(self):
+        start = self.cursor
         self.read_set_mem_proof()
         self.read_range_proof_without_v()
+        return self.cursor - start
