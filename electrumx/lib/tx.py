@@ -378,7 +378,7 @@ class DeserializerTxNavio(Deserializer):
         tokenid = None
         tokennftid = None
         vdata = None
-        script = None
+        script = b''
         if value == 0x7FFFFFFFFFFFFFFF:
             flags = self._read_le_int64()
             if flags & 0x1 << 3:
