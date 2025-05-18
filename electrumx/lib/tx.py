@@ -154,6 +154,7 @@ class TxBlsctDataNavio:
             pack_varbytes(self.ek),
             pack_varbytes(self.bk),
             self.range_proof.serialize(),
+            pack_le_uint32(self.view_tag),
         ))
 
 @dataclass
@@ -324,11 +325,12 @@ class Deserializer:
 @dataclass
 class TxNavio:
     '''Class representing transaction that has a time field.'''
-    __slots__ = 'version', 'inputs', 'outputs', 'locktime', 'raw'
+    __slots__ = 'version', 'inputs', 'outputs', 'locktime', 'txsig', 'raw'
     version: int
     inputs: Sequence
     outputs: Sequence
     locktime: int
+    txsig: bytes
     raw: bytes
 
 
@@ -336,7 +338,7 @@ class TxNavio:
 class TxNavioSegWit:
     '''Class representing a SegWit transaction with time.'''
     __slots__ = ('version', 'marker', 'flag', 'inputs', 'outputs',
-                 'witness', 'locktime', 'raw')
+                 'witness', 'locktime', 'txsig', 'raw')
     version: int
     marker: int
     flag: int
@@ -344,6 +346,7 @@ class TxNavioSegWit:
     outputs: Sequence
     witness: Sequence
     locktime: int
+    txsig: bytes
     raw: bytes
 
 
@@ -402,18 +405,15 @@ class DeserializerTxNavio(Deserializer):
         inputs = self._read_inputs()
         outputs = self._read_outputs()
         locktime = self._read_le_uint32()
-        strDZeel = ""
-        if version >= 2:
-            strDZeel = self._read_varbytes()
-        if version & 0x10 or version & 0x20:
-            vchbalsig = self._read_varbytes()
-        if version & 0x10:
-            vchtxsig = self._read_varbytes()
+        txsig = None
+        if version & 1:
+            txsig = self._read_nbytes(96)
         return TxNavio(
             version,
             inputs,
             outputs,
             locktime,
+            txsig,
             self.binary[start:self.cursor]
         )
 
@@ -443,11 +443,15 @@ class DeserializerTxNavio(Deserializer):
         start = self.cursor
         locktime = self._read_le_uint32()
 
+        txsig = None
+        if version & 1:
+            txsig = self._read_nbytes(96)
+
         vsize = (3 * base_size + self.binary_length) // 4
         orig_ser += self.binary[start:self.cursor]
 
         return TxNavioSegWit(
-            version, marker, flag, inputs, outputs, witness, locktime, orig_ser),\
+            version, marker, flag, inputs, outputs, witness, locktime, txsig, orig_ser),\
             self.TX_HASH_FN(orig_ser), vsize
 
     def read_tx(self):
