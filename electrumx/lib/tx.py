@@ -141,11 +141,11 @@ class RangeProofNavio:
 
 @dataclass
 class TxBlsctDataNavio:
-    __slots__ = 'sk', 'ek', 'bk', 'range_proof', 'view_tag'
+    __slots__ = 'range_proof','sk', 'ek', 'bk',  'view_tag'
+    range_proof: RangeProofNavio
     sk: bytes
     ek: bytes
     bk: bytes
-    range_proof: RangeProofNavio
     view_tag: int
 
     def serialize(self):
