@@ -420,7 +420,7 @@ class DeserializerTxNavio(Deserializer):
     def _read_tx_parts(self):
         '''Return a (deserialized TX, tx_hash, vsize) tuple.'''
         start = self.cursor
-        marker = self.binary[self.cursor + 8]
+        marker = self.binary[self.cursor + 4]
         if marker:
             tx = self.read_tx_no_segwit(start)
             tx_hash = self.TX_HASH_FN(self.binary[start:self.cursor])
