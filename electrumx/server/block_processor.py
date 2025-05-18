@@ -781,16 +781,6 @@ class BlockProcessor:
         return False
 
 
-class DecredBlockProcessor(BlockProcessor):
-    async def calc_reorg_range(self, count):
-        start, count = await super().calc_reorg_range(count)
-        if start > 0:
-            # A reorg in Decred can invalidate the previous block
-            start -= 1
-            count += 1
-        return start, count
-
-
 class NameIndexBlockProcessor(BlockProcessor):
 
     def advance_txs(self, txs, is_unspendable):
