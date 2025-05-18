@@ -370,7 +370,7 @@ class DeserializerTxNavio(Deserializer):
         bk = self.read_point()
         ek = self.read_point()
         view_tag = self._read_be_uint16()   
-        return BLSCTData(range_proof, sk, ek, bk, view_tag)
+        return TxBlsctDataNavio(range_proof, sk, ek, bk, view_tag)
 
     def _read_output(self):
         value = self._read_le_int64()
