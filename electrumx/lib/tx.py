@@ -243,12 +243,6 @@ class Deserializer:
         '''Return a (deserialized TX, vsize) pair.'''
         return self.read_tx(), self.binary_length
 
-    def read_tx_block(self):
-        '''Returns a list of (deserialized_tx, tx_hash) pairs.'''
-        read = self.read_tx_and_hash
-        # Some coins have excess data beyond the end of the transactions
-        return [read() for _ in range(self._read_varint())]
-
     def _read_inputs(self):
         read_input = self._read_input
         return [read_input() for i in range(self._read_varint())]
@@ -368,7 +362,7 @@ class DeserializerTxNavio(Deserializer):
         return [read_output() for i in range(self._read_varint())]
 
     def _read_blsct_data(self):
-        range_proof = self.read_pos_proof()
+        range_proof = self.read_range_proof()
         sk = self.read_point()
         bk = self.read_point()
         ek = self.read_point()
@@ -467,6 +461,12 @@ class DeserializerTxNavio(Deserializer):
         tx, tx_hash, vsize = self._read_tx_parts()
         return tx, vsize
 
+    def read_tx_block(self):
+        '''Returns a list of (deserialized_tx, tx_hash) pairs.'''
+        read = self.read_tx_and_hash
+        # Some coins have excess data beyond the end of the transactions
+        return [read() for _ in range(self._read_varint())]
+
     def read_point(self):
         return self._read_nbytes(48)
 
@@ -506,7 +506,7 @@ class DeserializerTxNavio(Deserializer):
         self.read_scalar()
         self.read_scalar()
 
-    def read_pos_proof(self):
+    def read_range_proof(self):
         Vs = self.read_points()
         if len(Vs) > 0:
             Ls = self.read_points()
@@ -522,7 +522,7 @@ class DeserializerTxNavio(Deserializer):
 
         return RangeProofNavio(Vs, Ls, Rs, A, A_wip, B, r_prime, s_prime, delta_prime, alpha_hat, tau_x)
 
-    def read_pos_proof_without_v(self):
+    def read_range_proof_without_v(self):
         self.read_points()
         self.read_points()
         self.read_point()
@@ -536,4 +536,4 @@ class DeserializerTxNavio(Deserializer):
 
     def read_pos_proof(self):
         self.read_set_mem_proof()
-        self.read_pos_proof_without_v()
+        self.read_range_proof_without_v()
