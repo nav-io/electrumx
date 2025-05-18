@@ -145,8 +145,6 @@ class Coin:
 
     @classmethod
     def max_fetch_blocks(cls, height):
-        if height < 130000:
-            return 1000
         return 100
 
     @classmethod

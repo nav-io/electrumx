@@ -514,8 +514,9 @@ class DeserializerTxNavio(Deserializer):
 
     def read_range_proof(self):
         Vs = self.read_points()
-        Ls = self.read_points() if len(Vs) > 0 else []
-        Rs = self.read_points() if len(Vs) > 0 else []
+        if len(Vs) > 0:
+            Ls = self.read_points()
+            Rs = self.read_points()
         A = self.read_point()
         A_wip = self.read_point()
         B = self.read_point()
