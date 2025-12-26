@@ -27,7 +27,7 @@ import pylru
 from aiorpcx import (Event, JSONRPCAutoDetect, JSONRPCConnection,
                      ReplyAndDisconnect, Request, RPCError, RPCSession,
                      TaskGroup, handler_invocation, serve_rs, serve_ws, sleep,
-                     NewlineFramer)
+                     NewlineFramer, run_in_thread)
 
 import electrumx
 import electrumx.lib.util as util
@@ -221,10 +221,6 @@ class SessionManager:
         self._merkle_hits = 0
         self.estimatefee_cache = pylru.lrucache(1000)
         self.notified_height = None
-        self.last_dao_statehash = None
-        self.last_proposals = {}
-        self.last_consultations = {}
-        self.last_consensus = None
         self.hsub_results = None
         self._task_group = TaskGroup()
         self._sslc = None
@@ -571,6 +567,7 @@ class SessionManager:
 
     async def rpc_stop(self):
         '''Shut down the server cleanly.'''
+        self.logger.warning('rpc_stop called; setting shutdown_event')
         self.shutdown_event.set()
         return 'stopping'
 
@@ -666,9 +663,12 @@ class SessionManager:
         '''Start the RPC server if enabled.  When the event is triggered,
         start TCP and SSL servers.'''
         try:
+            self.logger.debug('SessionManager.serve starting')
             await self._start_servers(service for service in self.env.services
                                       if service.protocol == 'rpc')
+            self.logger.debug('SessionManager.serve waiting for mempool_event')
             await event.wait()
+            self.logger.debug('SessionManager.serve mempool_event set, continuing')
 
             session_class = self.env.coin.SESSIONCLS
             session_class.cost_soft_limit = self.env.cost_soft_limit
@@ -696,18 +696,46 @@ class SessionManager:
             for service in self.env.report_services:
                 self.logger.info(f'advertising service {service}')
             # Start notifications; initialize hsub_results
-            await notifications.start(self.db.db_height, self._notify_sessions)
-            await self._start_external_servers()
+            self.logger.info('SessionManager: starting notifications...')
+            try:
+                await notifications.start(self.db.db_height, self._notify_sessions)
+            except asyncio.CancelledError:
+                self.logger.warning('notifications.start cancelled')
+                raise
+            except Exception as e:
+                self.logger.error(f'notifications.start failed: {e!r}')
+                self.logger.exception('notifications.start exception details:')
+                raise
+            else:
+                self.logger.debug('notifications.start completed')
+            self.logger.info('SessionManager: starting external servers...')
+            try:
+                await self._start_external_servers()
+            except Exception as e:
+                self.logger.error(f'_start_external_servers failed: {e!r}')
+                raise
+            self.logger.info('SessionManager: external servers started, spawning background tasks...')
             # Peer discovery should start after the external servers
             # because we connect to ourself
-            async with self._task_group as group:
-                await group.spawn(self.peer_mgr.discover_peers())
-                await group.spawn(self._clear_stale_sessions())
-                await group.spawn(self._handle_chain_reorgs())
-                await group.spawn(self._recalc_concurrency())
-                await group.spawn(self._log_sessions())
-                await group.spawn(self._manage_servers())
+            try:
+                async with self._task_group as group:
+                    self.logger.info('SessionManager: spawning background tasks in TaskGroup...')
+                    await group.spawn(self.peer_mgr.discover_peers())
+                    await group.spawn(self._clear_stale_sessions())
+                    await group.spawn(self._handle_chain_reorgs())
+                    await group.spawn(self._recalc_concurrency())
+                    await group.spawn(self._log_sessions())
+                    await group.spawn(self._manage_servers())
+                    self.logger.info('SessionManager: all background tasks spawned, TaskGroup running...')
+            except Exception as e:
+                self.logger.error(f'Exception in SessionManager TaskGroup: {e!r}')
+                self.logger.exception('TaskGroup exception details:')
+                raise
+        except asyncio.CancelledError:
+            self.logger.warning('SessionManager.serve cancelled')
+            raise
         finally:
+            self.logger.debug('SessionManager.serve exiting; closing servers and sessions')
             # Close servers then sessions
             await self._stop_servers(self.servers.keys())
             async with TaskGroup() as group:
@@ -839,7 +867,7 @@ class SessionManager:
             self,
             *,
             touched_hashxs: Set[bytes],
-            touched_outpoints: Set[Tuple[bytes, int]],
+            touched_outpoints: Set[bytes],
             height: int,
     ):
         '''Notify sessions about height changes and touched addresses.'''
@@ -848,67 +876,14 @@ class SessionManager:
         if height_changed:
             await self._refresh_hsub_results(height)
 
-        consensus = await self.daemon.getconsensusparameters(True)
-        consensus_changed = consensus != self.last_consensus
-        statehash = await self.daemon.getcfunddbstatehash()
-        statehash_changed = statehash != self.last_dao_statehash
-
-        dao = []
         
-        if statehash_changed:
-            self.dao_complete = []
-            
-            proposals = await self.daemon.listproposals("")
-            proposals_index = {}
-            
-            for p in proposals:
-                proposals_index[p["hash"]] = p
-                self.dao_complete.append({"t":"p","r":0,"w":p})
-                
-            for p in proposals_index:
-                if p not in self.last_proposals:
-                    dao.append({"t":"p","r":0,"w":proposals_index[p]})
-                elif proposals_index[p] != self.last_proposals[p]:
-                    dao.append({"t":"p","r":0,"w":proposals_index[p]})
-                    
-            for p in self.last_proposals:
-                if p not in proposals_index:
-                    dao.append({"t":"p","r":1,"w":self.last_proposals[p]})
-                    
-            self.last_proposals = proposals_index
-            
-            consultations = await self.daemon.listconsultations("")
-            consultations_index = {}
-            
-            for p in consultations:
-                consultations_index[p["hash"]] = p
-                self.dao_complete.append({"t":"c","r":0,"w":p})
-            
-            for p in consultations_index:
-                if p not in self.last_consultations:
-                    dao.append({"t":"c","r":0,"w":consultations_index[p]})
-                elif consultations_index[p] != self.last_consultations[p]:
-                    dao.append({"t":"c","r":0,"w":consultations_index[p]})
-                    
-            for p in self.last_consultations:
-                if p not in consultations_index:
-                     dao.append({"t":"c","r":1,"w":self.last_consultations[p]})
-            
-            self.last_consultations = consultations_index
-            
-        self.last_dao_statehash = statehash
-        self.last_consensus = consensus
+       
 
         for session in self.sessions:
             coro = session.notify(
                 touched_hashxs=touched_hashxs,
                 touched_outpoints=touched_outpoints,
                 height_changed=height_changed,
-                consensus_changed=consensus_changed,
-                consensus=consensus,
-                statehash_changed=statehash_changed,
-                dao=dao,
-                dao_complete=self.dao_complete,
             )
             await self._task_group.spawn(coro)
 
@@ -1006,7 +981,7 @@ class SessionBase(RPCSession):
             self,
             *,
             touched_hashxs: Set[bytes],
-            touched_outpoints: Set[Tuple[bytes, int]],
+            touched_outpoints: Set[bytes],
             height_changed: bool,
     ):
         pass
@@ -1101,15 +1076,11 @@ class ElectrumX(SessionBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.subscribe_headers = False
-        self.subscribe_dao = False
-        self.subscribe_consensus = False
         self.connection.max_response_size = self.env.max_send
-        self.subs_stakerscripts = {}
-        self.just_dao_subscribed = False
         self.hashX_subs = {}  # type: Dict[bytes, bytes]  # hashX -> scripthash
-        self.txoutpoint_subs = set()  # type: Set[Tuple[bytes, int]]
+        self.txoutpoint_subs = set()  # type: Set[bytes]
         self.mempool_hashX_statuses = {}  # type: Dict[bytes, str]
-        self.mempool_txoutpoint_statuses = {}  # type: Dict[Tuple[bytes, int], Mapping[str, Any]]
+        self.mempool_txoutpoint_statuses = {}  # type: Dict[bytes, Mapping[str, Any]]
         self.set_request_handlers(self.PROTOCOL_MIN)
         self.is_peer = False
         self.cost = 5.0   # Connection cost
@@ -1175,13 +1146,8 @@ class ElectrumX(SessionBase):
             self,
             *,
             touched_hashxs: Set[bytes],
-            touched_outpoints: Set[Tuple[bytes, int]],
+            touched_outpoints: Set[bytes],
             height_changed: bool,
-            consensus_changed: bool,
-            consensus: list,
-            statehash_changed: bool,
-            dao: list,
-            dao_complete: list,
     ):
         '''Notify the client about changes to touched addresses (from mempool
         updates or new blocks) and height.
@@ -1191,27 +1157,6 @@ class ElectrumX(SessionBase):
             args = (await self.subscribe_headers_result(), )
             await self.send_notification('blockchain.headers.subscribe', args)
 
-        if height_changed and len(self.subs_stakerscripts) > 0:
-            for script in self.subs_stakerscripts:
-                votes = await self.getstakervote(script)
-                if (votes != self.subs_stakerscripts[script]):
-                    await self.send_notification('blockchain.stakervote.subscribe', (script, votes))
-                    self.subs_stakerscripts[script] = votes
-
-        if consensus_changed and self.subscribe_consensus:
-            args = (consensus, )
-            await self.send_notification('blockchain.consensus.subscribe', args)
-
-        if self.subscribe_dao:
-            if self.just_dao_subscribed:
-                for d in dao_complete:
-                    args = (d, )
-                    await self.send_notification('blockchain.dao.subscribe', args)
-                self.just_dao_subscribed = False
-            elif statehash_changed:
-                for d in dao:
-                    args = (d, )
-                    await self.send_notification('blockchain.dao.subscribe', args)
 
         # hashXs
         num_hashx_notifs_sent = 0
@@ -1247,20 +1192,21 @@ class ElectrumX(SessionBase):
             method = 'blockchain.outpoint.subscribe'
             txo_to_status = {}
             for prevout in touched_outpoints:
-                txo_to_status[prevout] = await self.txoutpoint_status(*prevout)
+                txo_to_status[prevout] = await self.txoutpoint_status(prevout, 0)
 
             # Check mempool TXOs - the status is a function of the confirmed state of
             # other transactions. (this is to detect if height changed from -1 to 0)
             mempool_txoutpoint_statuses = self.mempool_txoutpoint_statuses.copy()
             for prevout, old_status in mempool_txoutpoint_statuses.items():
-                status = await self.txoutpoint_status(*prevout)
+                status = await self.txoutpoint_status(prevout, 0)
                 if status != old_status:
                     txo_to_status[prevout] = status
 
-            for tx_hash, txout_idx in touched_outpoints:
-                spend_status = txo_to_status[(tx_hash, txout_idx)]
+            for tx_hash in touched_outpoints:
+                spend_status = txo_to_status[tx_hash]
                 tx_hash_hex = hash_to_hex_str(tx_hash)
-                await self.send_notification(method, ((tx_hash_hex, txout_idx), spend_status))
+                # Output index is not used
+                await self.send_notification(method, ((tx_hash_hex, 0), spend_status))
             num_txo_notifs_sent = len(touched_outpoints)
 
         if num_hashx_notifs_sent + num_txo_notifs_sent > 0:
@@ -1273,13 +1219,7 @@ class ElectrumX(SessionBase):
         '''The result of a header subscription or notification.'''
         return self.session_mgr.hsub_results
 
-    async def subscribe_dao_result(self):
-        self.just_dao_subscribed = True
-        return {}
 
-    async def subscribe_consensus_result(self):
-        cp = await self.getconsensusparameters(True)
-        return cp
 
     async def headers_subscribe(self):
         '''Subscribe to get raw headers of new blocks.'''
@@ -1287,23 +1227,6 @@ class ElectrumX(SessionBase):
         self.bump_cost(0.25)
         return await self.subscribe_headers_result()
 
-    async def dao_subscribe(self):
-        '''Subscribe to get updates about the dao.'''
-        self.subscribe_dao = True
-        self.bump_cost(0.25)
-        return await self.subscribe_dao_result()
-
-    async def stakervote_subscribe(self, stakerscript):
-        self.bump_cost(0.25)
-        currentvotes = await self.getstakervote(stakerscript)
-        self.subs_stakerscripts[stakerscript] = currentvotes
-        return currentvotes
-
-    async def consensus_subscribe(self):
-        '''Subscribe to get updates about the consensus parameters.'''
-        self.subscribe_consensus = True
-        self.bump_cost(0.25)
-        return await self.subscribe_consensus_result()
 
     async def add_peer(self, features):
         '''Add a peer (but only if the peer resolves to the source).'''
@@ -1412,13 +1335,17 @@ class ElectrumX(SessionBase):
 
     async def txoutpoint_status(self, prev_txhash: bytes, txout_idx: int) -> Dict[str, Any]:
         self.bump_cost(0.2)
-        spend_status = await self.db.spender_for_txo(prev_txhash, txout_idx)
+        # We use output_hash (passed as prev_txhash) for lookup
+        spend_status = await self.db.spender_for_txo(prev_txhash, 0)
+        
         if spend_status.spender_height is not None:
             # TXO was created, was mined, was spent, and spend was mined.
-            assert spend_status.prev_height > 0
+            # assert spend_status.prev_height > 0  <-- We might not know prev_height if it's spent and we don't store it
             assert spend_status.spender_height > 0
             assert spend_status.spender_txhash is not None
         else:
+            # Check mempool for spend status
+            # Mempool likely still needs to be updated to support output_hash lookup if it hasn't been already
             mp_spend_status = await self.mempool.spender_for_txo(prev_txhash, txout_idx)
             if mp_spend_status.prev_height is not None:
                 spend_status.prev_height = mp_spend_status.prev_height
@@ -1426,6 +1353,7 @@ class ElectrumX(SessionBase):
                 spend_status.spender_height = mp_spend_status.spender_height
             if mp_spend_status.spender_txhash is not None:
                 spend_status.spender_txhash = mp_spend_status.spender_txhash
+        
         # convert to json dict the client expects
         status = {}
         if spend_status.prev_height is not None:
@@ -1435,7 +1363,7 @@ class ElectrumX(SessionBase):
                 status['spender_txhash'] = hash_to_hex_str(spend_status.spender_txhash)
                 status['spender_height'] = spend_status.spender_height
 
-        prevout = (prev_txhash, txout_idx)
+        prevout = prev_txhash
         if ((spend_status.prev_height is not None and spend_status.prev_height <= 0)
                 or (spend_status.spender_height is not None and spend_status.spender_height <= 0)):
             self.mempool_txoutpoint_statuses[prevout] = status
@@ -1635,8 +1563,15 @@ class ElectrumX(SessionBase):
         txout_idx = non_negative_integer(txout_idx)
         if spk_hint is not None:
             assert_hex_str(spk_hint)
+        # We index by output hash now, so txout_idx is effectively ignored for lookup
+        # but kept for protocol compatibility if needed, though internally we treat tx_hash as the output hash
+        
+        # NOTE: The client is sending us the output hash as the "tx_hash" parameter if the client is updated.
+        # If the client sends (txid, index), this will fail to find the output if we only have output_hash indexing.
+        # Assuming the client is also updated to send output_hash as the first param.
+        
         spend_status = await self.txoutpoint_status(tx_hash, txout_idx)
-        self.txoutpoint_subs.add((tx_hash, txout_idx))
+        self.txoutpoint_subs.add(tx_hash)
         return spend_status
 
     async def txoutpoint_unsubscribe(self, tx_hash, txout_idx):
@@ -1644,7 +1579,7 @@ class ElectrumX(SessionBase):
         tx_hash = assert_tx_hash(tx_hash)
         txout_idx = non_negative_integer(txout_idx)
         self.bump_cost(0.1)
-        prevout = (tx_hash, txout_idx)
+        prevout = tx_hash
         was_subscribed = prevout in self.txoutpoint_subs
         self.txoutpoint_subs.discard(prevout)
         self.mempool_txoutpoint_statuses.pop(prevout, None)
@@ -1708,25 +1643,6 @@ class ElectrumX(SessionBase):
             return False
         return self.remote_address().host == proxy_address.host
 
-    async def listproposals(self, filter=""):
-        res = await self.daemon_request('listproposals', filter)
-        return res
-
-    async def getconsensusparameters(self, extended=True):
-        res = await self.daemon_request('getconsensusparameters', extended)
-        return res
-
-    async def getstakervote(self, script):
-        res = await self.daemon_request('getstakervote', script)
-        return res
-
-    async def listconsultations(self, filter=""):
-        res = await self.daemon_request('listconsultations', filter)
-        return res
-
-    async def getcfunddbstatehash(self):
-        res = await self.daemon_request('getcfunddbstatehash')
-        return res
 
     async def replaced_banner(self, banner):
         network_info = await self.daemon_request('getnetworkinfo')
@@ -2004,6 +1920,63 @@ class ElectrumX(SessionBase):
             self.bump_cost(cost)
             return hash_to_hex_str(tx_hash)
 
+    async def block_txs_keys(self, height):
+        '''Returns a list of tx keys for a given block height.'''
+        height = non_negative_integer(height)
+        self.bump_cost(1.0)
+        return await self.db.get_block_txs_keys(height)
+
+    async def transaction_get_output(self, output_hash):
+        '''Return the serialized raw transaction output given its output hash
+
+        output_hash: the output hash as a hexadecimal string (Navio uses output hash indexing)
+        '''
+        output_hash_bytes = hex_str_to_hash(output_hash)
+        del output_hash
+
+        # Get the serialized output directly (fast path, no deserialization needed)
+        serialized_output = self.db.read_serialized_output(output_hash_bytes[::-1])
+        if serialized_output is None:
+            raise RPCError(BAD_REQUEST, f'output {hash_to_hex_str(output_hash_bytes)} not found in database')
+        
+        return serialized_output.hex()
+
+    async def block_txs_keys_range(self, start_height):
+        '''Returns a list of tx keys for a given range of block heights.'''
+        import json
+        
+        start_height = non_negative_integer(start_height)
+        
+        # Use a headroom below max_send to keep responses under protocol limits
+        max_size = max(100_000, self.env.max_send - 50_000)
+        
+        blocks, next_height = await self.db.get_range_txs_keys(start_height, 10*1024*1024, max_size)
+        
+        # Measure JSON serialization time and size
+        result = {
+            "blocks": blocks,
+            "next_height": next_height
+        }
+
+        # Ensure the final payload fits within max_send; trim trailing blocks if needed
+        def encode_result(payload):
+            encoded = json.dumps(payload, separators=(',', ':'))
+            return encoded, len(encoded.encode('utf-8'))
+
+        json_str, json_size = encode_result(result)
+        while json_size > self.env.max_send and result["blocks"]:
+            result["blocks"].pop()
+            result["next_height"] -= 1
+            json_str, json_size = encode_result(result)
+
+        if json_size > self.env.max_send:
+            raise RPCError(BAD_REQUEST, 'response too large for max_send; try a smaller range')
+
+        # Log performance metrics
+        # self.bump_cost(len(blocks) * 0.00001)
+        
+        return result
+
     async def compact_fee_histogram(self):
         self.bump_cost(1.0)
         return await self.mempool.compact_fee_histogram()
@@ -2014,11 +1987,10 @@ class ElectrumX(SessionBase):
         handlers = {
             'blockchain.block.header': self.block_header,
             'blockchain.block.headers': self.block_headers,
+            'blockchain.block.get_txs_keys': self.block_txs_keys,
+            'blockchain.block.get_range_txs_keys': self.block_txs_keys_range,
             'blockchain.estimatefee': self.estimatefee,
             'blockchain.headers.subscribe': self.headers_subscribe,
-            'blockchain.dao.subscribe': self.dao_subscribe,
-            'blockchain.stakervote.subscribe': self.stakervote_subscribe,
-            'blockchain.consensus.subscribe': self.consensus_subscribe,
             'blockchain.relayfee': self.relayfee,
             'blockchain.scripthash.get_balance': self.scripthash_get_balance,
             'blockchain.scripthash.get_history': self.scripthash_get_history_proto_legacy,
@@ -2029,13 +2001,11 @@ class ElectrumX(SessionBase):
             'blockchain.transaction.get': self.transaction_get,
             'blockchain.transaction.get_keys': self.transaction_get_keys,
             'blockchain.transaction.get_merkle': self.transaction_merkle,
+            'blockchain.transaction.get_output': self.transaction_get_output,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
             'blockchain.dotnav.resolve_name': self.resolve_name,
             'blockchain.token.get_token': self.get_token,
             'blockchain.token.get_nft': self.get_nft,
-            'blockchain.listproposals': self.listproposals,
-            'blockchain.listconsultations': self.listconsultations,
-            'blockchain.getcfunddbstatehash': self.getcfunddbstatehash,
             'mempool.get_fee_histogram': self.compact_fee_histogram,
             'server.add_peer': self.add_peer,
             'server.banner': self.banner,
@@ -2097,22 +2067,12 @@ class DashElectrumX(ElectrumX):
             touched_hashxs: Set[bytes],
             touched_outpoints: Set[Tuple[bytes, int]],
             height_changed: bool,
-            consensus_changed: bool,
-            consensus: list,
-            statehash_changed: bool,
-            dao: list,
-            dao_complete: list
     ):
         '''Notify the client about changes in masternode list.'''
         await super().notify(
             touched_hashxs=touched_hashxs,
             touched_outpoints=touched_outpoints,
             height_changed=height_changed,
-            consensus_changed=consensus_changed,
-            consensus=consensus,
-            statehash_changed=statehash_changed,
-            dao=dao,
-            dao_complete=dao_complete
         )
         for mn in self.mns.copy():
             status = await self.daemon_request('masternode_list',

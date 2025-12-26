@@ -26,7 +26,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ENV SERVICES="tcp://:40001"
-ENV COIN=Navcoin
+ENV COIN=Navio
 ENV DB_DIRECTORY=/db
 ENV DAEMON_URL="http://username:password@hostname:port/"
 ENV ALLOW_ROOT=true

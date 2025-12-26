@@ -307,10 +307,31 @@ class Navio(Coin):
     def block(cls, raw_block, height):
         '''Return a Block namedtuple given a raw block and its height.'''
         header = cls.block_header(raw_block, height)
+        header_len = len(header)
         offset = 0
-        if struct.unpack(">I", header[:4])[0] & 0x01:
-            offset = cls.DESERIALIZER(raw_block, start=len(header)).read_pos_proof()
-        txs = cls.DESERIALIZER(raw_block, start=len(header) + offset).read_tx_block()
+        version, = struct.unpack("<I", header[:4])
+        # Navio encodes PoS blocks with VERSION_BIT_POS (0x01000000) set.
+        # PoS blocks serialize a ProofOfStake struct between the header and txs.
+        is_pos = bool(version & 0x01000000)
+        if is_pos:
+            deserializer = cls.DESERIALIZER(raw_block, start=header_len)
+            try:
+                offset = deserializer.read_pos_proof()
+            except Exception as e:
+                raise ValueError(
+                    f'Failed to read PoS proof at height {height}: {e}. '
+                    f'Header length: {header_len}, block length: {len(raw_block)}, '
+                    f'version: 0x{version:08x}'
+                ) from e
+        tx_start = header_len + offset
+        if tx_start >= len(raw_block):
+            raise ValueError(
+                f'Block at height {height}: calculated tx start position {tx_start} '
+                f'exceeds block length {len(raw_block)} (header: {header_len}, offset: {offset}, '
+                f'is_pos: {is_pos}, version: 0x{version:08x})'
+            )
+
+        txs = cls.DESERIALIZER(raw_block, start=tx_start).read_tx_block()
         return Block(raw_block, header, txs)
 
 
@@ -321,7 +342,6 @@ class NavioTestnet(Navio):
     TX_COUNT = 0
     TX_COUNT_HEIGHT = 1
     NET = 'testnet'
-    RPC_PORT = 33577
+    RPC_PORT = 33677
     DESERIALIZER = lib_tx.DeserializerTxNavio
-    GENESIS_HASH = ('7503411ece6b8da29e0855013e0bbeb6738e3fdcc5c0157e9a103a98a2ca2386')
-
+    GENESIS_HASH = ('4fc2a50072391d595ebd035debbf0060a9cb537106a2da7dd758505a51410445')

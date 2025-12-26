@@ -20,11 +20,11 @@ from electrumx.server.daemon import DaemonError, Daemon
 from electrumx.lib.hash import hash_to_hex_str, HASHX_LEN
 from electrumx.lib.script import is_unspendable_legacy, is_unspendable_genesis
 from electrumx.lib.util import (
-    chunks, class_logger, pack_le_uint32, pack_le_uint64, unpack_le_uint64
+    chunks, class_logger, pack_le_uint32, pack_le_uint64
 )
-from electrumx.lib.tx import Tx
+from electrumx.lib.tx import Tx, ZERO
 from electrumx.server.db import FlushData, DB
-from electrumx.server.history import TXNUM_LEN, TXOUTIDX_LEN, TXOUTIDX_PADDING, pack_txnum
+from electrumx.server.history import TXNUM_LEN, TXOUTIDX_LEN, TXOUTIDX_PADDING, pack_txnum, unpack_txnum
 
 if TYPE_CHECKING:
     from electrumx.lib.coins import Coin
@@ -65,11 +65,14 @@ class Prefetcher:
                     await asyncio.sleep(self.polling_delay)
             except DaemonError as e:
                 self.logger.info(f'ignoring daemon error: {e}')
-            except asyncio.CancelledError as e:
-                self.logger.info(f'cancelled; prefetcher stopping {e}')
+                await asyncio.sleep(self.polling_delay)
+            except asyncio.CancelledError:
+                self.logger.info('cancelled; prefetcher stopping')
                 raise
-            except Exception:
-                self.logger.exception(f'ignoring unexpected exception')
+            except Exception as e:
+                self.logger.exception(f'unexpected exception in prefetcher: {e}')
+                # Continue the loop - don't let exceptions kill the prefetcher
+                await asyncio.sleep(self.polling_delay)
 
     def get_prefetched_blocks(self):
         '''Called by block processor when it is processing queued blocks.'''
@@ -221,8 +224,24 @@ class BlockProcessor:
         if not raw_blocks:
             return
         first = self.height + 1
-        blocks = [self.coin.block(raw_block, first + n)
-                  for n, raw_block in enumerate(raw_blocks)]
+        blocks = []
+        for n, raw_block in enumerate(raw_blocks):
+            height = first + n
+            block_hash = '<unknown>'
+            try:
+                header = self.coin.block_header(raw_block, height)
+                block_hash = hash_to_hex_str(self.coin.header_hash(header))
+            except Exception:
+                # Best-effort hash for logging; keep going even if header parsing fails
+                pass
+            try:
+                blocks.append(self.coin.block(raw_block, height))
+            except Exception as e:
+                self.logger.error('failed to deserialize block at height %s hash %s '
+                                  '(raw length %s): %r',
+                                  height, block_hash, len(raw_block), e)
+                self.logger.exception('block deserialization exception details:')
+                raise
         headers = [block.header for block in blocks]
         hprevs = [self.coin.header_prevhash(h) for h in headers]
         chain = [self.tip] + [self.coin.header_hash(h) for h in headers[:-1]]
@@ -459,75 +478,121 @@ class BlockProcessor:
         to_le_uint64 = pack_le_uint64
         _pack_txnum = pack_txnum
 
-        for tx, tx_hash in txs:
+        # For Navio: process outputs first, then inputs, to handle same-block dependencies
+        # Initialize tx_keys_list upfront for all transactions
+        tx_keys_list = [{'vin': [], 'vout': []} for _ in txs]
+        
+        # First pass: add all outputs to cache
+        for idx, (tx, tx_hash) in enumerate(txs):
             hashXs = []
             append_hashX = hashXs.append
             tx_numb = _pack_txnum(tx_num)
+            tx_keys = tx_keys_list[idx]
 
             self.db.write_raw_tx(tx.raw, tx_hash)
-            tx_keys = {
-                'vin': [],
-                'vout': []
-            }
 
-            # Spend the inputs
-            for txin in tx.inputs:
-                if txin.is_generation():
-                    tx_keys["vin"].append({})
-                    continue
-                cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
-                undo_info_append(cache_value)
-                prevout_tuple = (txin.prev_hash, txin.prev_idx)
-                put_txo_to_spender_map(prevout_tuple, tx_hash)
-                add_touched_outpoint(prevout_tuple)
-                prevTx = self.db.read_raw_tx(txin.prev_hash)
-                if isinstance(prevTx, bytes):
-                    prevOut = self.coin.DESERIALIZER(prevTx, start=0).read_tx().outputs[txin.prev_idx]
-
-                    if prevOut.pk_script.hex() == "51" or prevOut.tokenid == bytes(32) or txout.tokenid is None:
-                        append_hashX(cache_value[:HASHX_LEN])
-
-                    obj = {'txid': txin.prev_hash[::-1].hex(), 'vout': txin.prev_idx}
-
-                    if prevOut.pk_script.hex() == "51" and prevOut.blsct_data.ek is not None and prevOut.blsct_data.sk is not None:
-                        obj['outputKey'] = prevOut.blsct_data.ek.hex()
-                        obj['spendingKey'] = prevOut.blsct_data.sk.hex()
-                    else:
-                        obj['script'] = prevOut.pk_script.hex()
-                    tx_keys["vin"].append(obj)
-                else:
-                    append_hashX(cache_value[:HASHX_LEN])
-                    tx_keys["vin"].append({})
-                    continue
-
-            # Add the new UTXOs
-            for idx, txout in enumerate(tx.outputs):
-                # Ignore unspendable outputs
-                if is_unspendable(txout.pk_script):
-                    tx_keys["vout"].append({})
+            # Add the new UTXOs first (before spending inputs)
+            for out_idx, txout in enumerate(tx.outputs):
+                # Get output hash for all outputs (including unspendable)
+                output_hash = txout.get_hash()
+                # Serialize the output for fast retrieval (avoid deserializing entire transaction later)
+                serialized_output = txout.serialize()
+                # Store mapping from output_hash to tx_hash for all outputs (including unspendable)
+                # Also store serialized output directly for fast retrieval
+                # This allows us to look up outputs even if they're spent or unspendable
+                self.db.write_output_hash_to_tx_hash(output_hash, tx_hash, serialized_output)
+                
+                # Ignore unspendable outputs for UTXO database
+                if all(b == 0 for b in txout.blsct_data.ek) and all(b == 0 for b in txout.blsct_data.bk):
                     continue
 
                 # Get the hashX
                 hashX = script_hashX(txout.pk_script)
-                if txout.pk_script.hex() == "51" or txout.tokenid == bytes(32) or txout.tokenid is None:
+                
+                if txout.tokenid == bytes(32) or txout.tokenid is None:
                     append_hashX(hashX)
-                    put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
+                    put_utxo(output_hash,
                         hashX + tx_numb + to_le_uint64(txout.value))
                 else:
-                    put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
+                    put_utxo(output_hash,
                              script_hashX(b'') + tx_numb + to_le_uint64(txout.value))
-                add_touched_outpoint((tx_hash, idx))
-                if txout.pk_script.hex() == "51" and txout.blsct_data.ek is not None and txout.blsct_data.sk is not None:
-                    tx_keys["vout"].append({'outputKey': txout.blsct_data.ek.hex(), 'spendingKey': txout.blsct_data.sk.hex()})
-                else:
-                    tx_keys["vout"].append({'script': txout.pk_script.hex()})
-
-            self.db.write_tx_keys(tx_keys, tx_hash)
+                # General logging for UTXO additions (DEBUG level)
+                add_touched_outpoint(output_hash)
+                tx_keys["vout"].append({'spendingKey': txout.blsct_data.sk.hex(), 'blindingKey': txout.blsct_data.bk.hex(), 'viewTag': txout.blsct_data.view_tag, 'script': txout.pk_script.hex(), 'outputHash': output_hash.hex()})
 
             append_hashXs(hashXs)
-            update_touched_hashxs(hashXs)
             put_txhash_to_txnum_map(tx_hash, tx_num)
             tx_num += 1
+
+        # Second pass: spend the inputs (now all outputs are in cache)
+        for (tx, tx_hash), tx_keys, hashXs in zip(txs, tx_keys_list, hashXs_by_tx):
+            append_hashX = hashXs.append
+            # Spend the inputs
+            for txin_idx, txin in enumerate(tx.inputs):
+                if txin.is_generation():
+                    continue
+                
+                try:
+                    cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
+                except ChainError as e:
+                    # Add context about which transaction is trying to spend this output
+                    self.logger.error(f'Failed to spend UTXO {hash_to_hex_str(txin.prev_hash)} in transaction {hash_to_hex_str(tx_hash)} at height {self.height}')
+                    raise
+                undo_info_append(cache_value)
+                # For Navio: use output hash directly (not a tuple) since we index by output hash only
+                put_txo_to_spender_map(txin.prev_hash, tx_hash)
+                add_touched_outpoint(txin.prev_hash)
+
+                tx_keys["vin"].append({'prevoutHash': txin.prev_hash.hex()})
+                append_hashX(cache_value[:HASHX_LEN])
+                continue
+                
+                # For Navio: txin.prev_hash is the output hash, not transaction hash
+                # We need to find the transaction that created this output using the tx_num from cache_value
+                prev_tx_hash = self.db.read_tx_hash_for_output_hash(txin.prev_hash)
+                
+                if prev_tx_hash:
+                    prevTx = self.db.read_raw_tx(prev_tx_hash)
+                    if isinstance(prevTx, bytes):
+                        # Find the output with matching hash
+                        prev_tx_obj = self.coin.DESERIALIZER(prevTx, start=0).read_tx()
+                        prevOut = None
+                        out_idx = 0
+                        for idx, out in enumerate(prev_tx_obj.outputs):
+                            if out.get_hash() == txin.prev_hash:
+                                prevOut = out
+                                out_idx = idx
+                                break
+                        
+                        if prevOut:
+                            if prevOut.tokenid == bytes(32):
+                                append_hashX(cache_value[:HASHX_LEN])
+
+                            obj = {'outhash': prev_tx_hash[::-1].hex()}
+
+                            obj['outputKey'] = prevOut.blsct_data.ek.hex()
+                            obj['spendingKey'] = prevOut.blsct_data.sk.hex()
+                            obj['blindingKey'] = prevOut.blsct_data.bk.hex()
+                            obj['viewTag'] = prevOut.blsct_data.view_tag
+                            obj['script'] = prevOut.pk_script.hex()
+                            
+                            obj['outputHash'] = prevOut.get_hash().hex()
+                            tx_keys["vin"].append(obj)
+                        else:
+                            # Output not found in transaction (shouldn't happen)
+                            append_hashX(cache_value[:HASHX_LEN])
+                            tx_keys["vin"].append({'outputHash': hash_to_hex_str(txin.prev_hash)})
+                    else:
+                        append_hashX(cache_value[:HASHX_LEN])
+                        tx_keys["vin"].append({'outputHash': hash_to_hex_str(txin.prev_hash)})
+                else:
+                    # Couldn't find transaction hash from tx_num
+                    append_hashX(cache_value[:HASHX_LEN])
+                    tx_keys["vin"].append({'outputHash': hash_to_hex_str(txin.prev_hash)})
+
+            # Write tx_keys for this transaction
+            self.db.write_tx_keys(tx_keys, tx_hash)
+            update_touched_hashxs(hashXs)
 
         self.tx_hashes.append(b''.join(tx_hash for tx, tx_hash in txs))
         self.db.history.add_unflushed(
@@ -609,6 +674,9 @@ class BlockProcessor:
             for txin in reversed(tx.inputs):
                 if txin.is_generation():
                     continue
+                # Also treat all-zero prev_hash as coinbase (some coins may use prev_idx=0 instead of -1)
+                if txin.prev_hash == ZERO:
+                    continue
                 n -= undo_entry_len
                 undo_item = undo_info[n:n + undo_entry_len]
                 prevout = txin.prev_hash + pack_le_uint32(txin.prev_idx)[:TXOUTIDX_LEN]
@@ -676,30 +744,39 @@ class BlockProcessor:
         If the UTXO is not in the cache it must be on disk.  We store
         all UTXOs so not finding one indicates a logic error or DB
         corruption.
+        
+        For Navio: tx_hash is the output hash (from get_hash()), and txout_idx is ignored.
         '''
         # Fast track is it being in the cache
-        idx_packed = pack_le_uint32(txout_idx)[:TXOUTIDX_LEN]
-        cache_value = self.utxo_cache.pop(tx_hash + idx_packed, None)
+        cache_value = self.utxo_cache.pop(tx_hash, None)
         if cache_value:
             return cache_value
 
-        # Spend it from the DB.
-        tx_num = self.db.fs_txnum_for_txhash(tx_hash)
-        if tx_num is None:
-            raise ChainError(f'UTXO {hash_to_hex_str(tx_hash)} / {txout_idx:,d} has '
-                             f'no corresponding tx_num in DB')
-        tx_numb = pack_txnum(tx_num)
+        # Check if it's still in the cache (in case pop didn't find it but it exists)
+        # This can happen if the output was added in the first pass of the same block
+        if tx_hash in self.utxo_cache:
+            cache_value = self.utxo_cache.pop(tx_hash)
+            return cache_value
 
-        # Key: b'h' + tx_num + txout_idx
-        # Value: hashX
-        hdb_key = b'h' + tx_numb + idx_packed
-        hashX = self.db.utxo_db.get(hdb_key)
-        if hashX is None:
+        # Spend it from the DB.
+
+        # Key: b'h' + output_hash
+        # Value: hashX + tx_num
+        hdb_key = b'h' + tx_hash
+        hdb_value = self.db.utxo_db.get(hdb_key)
+        if hdb_value is None:
+            # Check if it was already spent (in db_deletes)
+            if hdb_key in self.db_deletes:
+                self.logger.warning(f'UTXO {hash_to_hex_str(tx_hash)} / {txout_idx:,d} was already spent in this block')
             raise ChainError(f'UTXO {hash_to_hex_str(tx_hash)} / {txout_idx:,d} not '
                              f'found in "h" table')
-        # Key: b'u' + address_hashX + tx_num + txout_idx
+        
+        hashX = hdb_value[:HASHX_LEN]
+        tx_numb = hdb_value[HASHX_LEN:]
+
+        # Key: b'u' + hashX + tx_num + output_hash
         # Value: the UTXO value as a 64-bit unsigned integer
-        udb_key = b'u' + hashX + tx_numb + idx_packed
+        udb_key = b'u' + hashX + tx_numb + tx_hash
         utxo_value_packed = self.db.utxo_db.get(udb_key)
         if utxo_value_packed is None:
             raise ChainError(f'UTXO {hash_to_hex_str(tx_hash)} / {txout_idx:,d} not '
@@ -707,35 +784,56 @@ class BlockProcessor:
         # Remove both entries for this UTXO
         self.db_deletes.append(hdb_key)
         self.db_deletes.append(udb_key)
+        
         return hashX + tx_numb + utxo_value_packed
 
     async def _process_prefetched_blocks(self):
         '''Loop forever processing blocks as they arrive.'''
         while True:
-            if self.height == self.daemon.cached_height():
-                if not self._caught_up_event.is_set():
-                    await self._first_caught_up()
-                    self._caught_up_event.set()
-            await self.blocks_event.wait()
-            self.blocks_event.clear()
-            if self.reorg_count:
-                await self.reorg_chain(self.reorg_count)
-                self.reorg_count = 0
-            else:
-                blocks = self.prefetcher.get_prefetched_blocks()
-                await self.check_and_advance_blocks(blocks)
+            try:
+                if self.height == self.daemon.cached_height():
+                    if not self._caught_up_event.is_set():
+                        await self._first_caught_up()
+                        self._caught_up_event.set()
+                await self.blocks_event.wait()
+                self.blocks_event.clear()
+                if self.reorg_count:
+                    await self.reorg_chain(self.reorg_count)
+                    self.reorg_count = 0
+                else:
+                    blocks = self.prefetcher.get_prefetched_blocks()
+                    await self.check_and_advance_blocks(blocks)
+            except ChainError as e:
+                self.logger.error(f'ChainError during block processing: {e}')
+                self.logger.exception('ChainError details:')
+                # Re-raise to let TaskGroup handle it, but log first
+                raise
+            except Exception as e:
+                self.logger.error(f'Unexpected error during block processing: {e}')
+                self.logger.exception('Unexpected error details:')
+                # Re-raise to let TaskGroup handle it, but log first
+                raise
 
     async def _first_caught_up(self):
-        self.logger.info(f'caught up to height {self.height}')
-        # Flush everything but with first_sync->False state.
-        first_sync = self.db.first_sync
-        self.db.first_sync = False
-        await self.flush(True)
-        if first_sync:
-            self.logger.info(f'{electrumx.version} synced to '
-                             f'height {self.height:,d}')
-        # Reopen for serving
-        await self.db.open_for_serving()
+        try:
+            self.logger.info(f'caught up to height {self.height}')
+            # Flush everything but with first_sync->False state.
+            first_sync = self.db.first_sync
+            self.db.first_sync = False
+            self.logger.info('_first_caught_up: flushing to DB...')
+            await self.flush(True)
+            self.logger.info('_first_caught_up: flush complete')
+            if first_sync:
+                self.logger.info(f'{electrumx.version} synced to '
+                                 f'height {self.height:,d}')
+            # Reopen for serving
+            self.logger.info('_first_caught_up: reopening DBs for serving...')
+            await self.db.open_for_serving()
+            self.logger.info('_first_caught_up: DBs reopened for serving, complete')
+        except Exception as e:
+            self.logger.error(f'Error in _first_caught_up: {e}')
+            self.logger.exception('Exception details:')
+            raise
 
     async def _first_open_dbs(self):
         await self.db.open_for_sync()
@@ -768,6 +866,13 @@ class BlockProcessor:
         except CancelledError:
             self.logger.info('flushing to DB for a clean shutdown...')
             await self.flush(True)
+        except Exception as e:
+            self.logger.error(f'Unexpected error in fetch_and_process_blocks: {e}')
+            self.logger.exception('Error details:')
+            # Re-raise to let the TaskGroup handle it
+            raise
+        finally:
+            self.logger.debug('fetch_and_process_blocks exiting')
 
     def force_chain_reorg(self, count):
         '''Force a reorg of the given number of blocks.
@@ -852,9 +957,9 @@ class LTORBlockProcessor(BlockProcessor):
                 # Get the hashX
                 hashX = script_hashX(txout.pk_script)
                 add_hashXs(hashX)
-                put_utxo(tx_hash + to_le_uint32(idx)[:TXOUTIDX_LEN],
+                put_utxo(txout.get_hash(),
                          hashX + tx_numb + to_le_uint64(txout.value))
-                add_touched_outpoint((tx_hash, idx))
+                add_touched_outpoint(txout.get_hash())
             put_txhash_to_txnum_map(tx_hash, tx_num)
             tx_num += 1
 
@@ -865,12 +970,15 @@ class LTORBlockProcessor(BlockProcessor):
             for txin in tx.inputs:
                 if txin.is_generation():
                     continue
+                # Also treat all-zero prev_hash as coinbase (some coins may use prev_idx=0 instead of -1)
+                if txin.prev_hash == ZERO:
+                    continue
                 cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
                 undo_info_append(cache_value)
                 add_hashXs(cache_value[:HASHX_LEN])
-                prevout_tuple = (txin.prev_hash, txin.prev_idx)
-                put_txo_to_spender_map(prevout_tuple, tx_hash)
-                add_touched_outpoint(prevout_tuple)
+                
+                put_txo_to_spender_map(txin.prev_hash, tx_hash)
+                add_touched_outpoint(txin.prev_hash)
 
         # Update touched set for notifications
         for hashXs in hashXs_by_tx:
@@ -910,11 +1018,14 @@ class LTORBlockProcessor(BlockProcessor):
             for txin in tx.inputs:
                 if txin.is_generation():
                     continue
+                # Also treat all-zero prev_hash as coinbase (some coins may use prev_idx=0 instead of -1)
+                if txin.prev_hash == ZERO:
+                    continue
                 undo_item = undo_info[n:n + undo_entry_len]
-                prevout = txin.prev_hash + pack_le_uint32(txin.prev_idx)[:TXOUTIDX_LEN]
+                prevout = txin.prev_hash
                 put_utxo(prevout, undo_item)
                 add_touched_hashx(undo_item[:HASHX_LEN])
-                add_touched_outpoint((txin.prev_hash, txin.prev_idx))
+                add_touched_outpoint(txin.prev_hash)
                 n += undo_entry_len
 
         assert n == len(undo_info)
@@ -928,10 +1039,11 @@ class LTORBlockProcessor(BlockProcessor):
                     continue
 
                 # Get the hashX
-                cache_value = spend_utxo(tx_hash, idx)
+                output_hash = txout.get_hash()
+                cache_value = spend_utxo(output_hash, 0)
                 hashX = cache_value[:HASHX_LEN]
                 add_touched_hashx(hashX)
-                add_touched_outpoint((tx_hash, idx))
+                add_touched_outpoint(output_hash)
 
         self.undo_tx_hashes.append(b''.join(tx_hash for tx, tx_hash in txs))
         self.tx_count -= len(txs)

@@ -101,6 +101,7 @@ class ServerBase:
             try:
                 await self.serve(shutdown_event)
             finally:
+                self.logger.debug('serve() coroutine returned, setting shutdown_event')
                 shutdown_event.set()
 
         self.start_time = time.time()
@@ -115,11 +116,13 @@ class ServerBase:
         loop.set_exception_handler(self.on_exception)
 
         # Start serving and wait for shutdown, log receipt of the event
-        server_task = await spawn(serve, report_crash=False)
+        server_task = await spawn(serve)
         try:
             await shutdown_event.wait()
         except KeyboardInterrupt:
             self.logger.warning('received keyboard interrupt, initiating shutdown')
+        else:
+            self.logger.info('shutdown_event triggered; beginning shutdown sequence')
 
         self.logger.info('shutting down')
 

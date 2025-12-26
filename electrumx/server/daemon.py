@@ -292,6 +292,10 @@ class Daemon:
         '''Return the transaction keys with the given hash.'''
         return await self._send_single('gettransactionkeys', (hex_hash, ))
 
+    async def gettxfromoutputhash(self, output_hash):
+        '''Return the transaction info for an output hash (Navio-specific).'''
+        return await self._send_single('gettxfromoutputhash', (output_hash, ))
+
     async def resolvename(self, name, resolvesub):
         '''Resolves a dotNav name.'''
         return await self._send_single('resolvename', (name, resolvesub, ))
@@ -303,26 +307,6 @@ class Daemon:
     async def getnft(self, id, subid, get_utxo=False):
         '''Returns info from a token.'''
         return await self._send_single('getnft', (id, subid, get_utxo, ))
-
-    async def listproposals(self, filter):
-        return await self._send_single('listproposals',
-                                       (filter, ))
-
-    async def listconsultations(self, filter):
-        return await self._send_single('listconsultations',
-                                       (filter, ))
-
-    async def getcfunddbstatehash(self):
-        return await self._send_single('getcfunddbstatehash')
-
-    async def getconsensusparameters(self, expanded):
-        return await self._send_single('getconsensusparameters', (expanded, ))
-
-    async def viewaggregationsession(self, expanded):
-        return await self._send_single('viewaggregationsession', (expanded, ))
-
-    async def getstakervote(self, script):
-        return await self._send_single('getstakervote', (script, ))
 
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.

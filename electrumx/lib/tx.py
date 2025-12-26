@@ -38,6 +38,7 @@ from electrumx.lib.util import (
     unpack_be_uint16_from,
     unpack_le_uint32_from, unpack_le_uint64_from, pack_le_int32, pack_varint,
     pack_le_uint16, pack_le_uint32, pack_le_int64, pack_varbytes,
+    pack_be_uint16,
 )
 
 ZERO = bytes(32)
@@ -81,7 +82,7 @@ class TxInput:
 
     def is_generation(self):
         '''Test if an input is generation/coinbase like'''
-        return self.prev_idx == MINUS_1 and self.prev_hash == ZERO
+        return self.prev_hash == ZERO
 
     def serialize(self):
         return b''.join((
@@ -121,22 +122,33 @@ class RangeProofNavio:
     tau_x: bytes
 
     def serialize(self):
-        return b''.join((
+        # Vs, Ls, Rs are lists of points (bytes), serialize as: varint(count) + concatenated points
+        # Note: Ls and Rs are only serialized if Vs.Size() > 0 (matching Navio-core ProofBase::Serialize)
+        vs_bytes = b''.join(self.Vs) if self.Vs else b''
+        result = [
             pack_varint(len(self.Vs)),
-            pack_varbytes(self.Vs),
-            pack_varint(len(self.Ls)),
-            pack_varbytes(self.Ls),
-            pack_varint(len(self.Rs)),
-            pack_varbytes(self.Rs),
-            pack_varbytes(self.A),
-            pack_varbytes(self.A_wip),
-            pack_varbytes(self.B),
-            pack_varbytes(self.r_prime),
-            pack_varbytes(self.s_prime),
-            pack_varbytes(self.delta_prime),
-            pack_varbytes(self.alpha_hat),
-            pack_varbytes(self.tau_x),
-        ))
+            vs_bytes,
+        ]
+        if len(self.Vs) > 0:
+            ls_bytes = b''.join(self.Ls) if self.Ls else b''
+            rs_bytes = b''.join(self.Rs) if self.Rs else b''
+            result.extend([
+                pack_varint(len(self.Ls)),
+                ls_bytes,
+                pack_varint(len(self.Rs)),
+                rs_bytes,
+            ])
+        result.extend([
+            self.A,
+            self.A_wip,
+            self.B,
+            self.r_prime,
+            self.s_prime,
+            self.delta_prime,
+            self.alpha_hat,
+            self.tau_x,
+        ])
+        return b''.join(result)
 
 
 @dataclass
@@ -149,12 +161,16 @@ class TxBlsctDataNavio:
     view_tag: int
 
     def serialize(self):
+        # Note: Order must match Navio-core CTxOutBLSCTData::Serialize() and _read_blsct_data():
+        # range_proof, spendingKey (sk), blindingKey (bk), ephemeralKey (ek), view_tag
+        # view_tag is uint16_t, which is little-endian in Bitcoin/Navio
+        # MclG1Point is serialized as fixed 48 bytes (not varbytes) - see MclG1Point::Serialize()
         return b''.join((
-            pack_varbytes(self.sk),
-            pack_varbytes(self.ek),
-            pack_varbytes(self.bk),
             self.range_proof.serialize(),
-            pack_le_uint32(self.view_tag),
+            self.sk,  # Fixed 48 bytes, not varbytes
+            self.bk,  # Fixed 48 bytes, not varbytes
+            self.ek,  # Fixed 48 bytes, not varbytes
+            pack_le_uint16(self.view_tag),
         ))
 
 @dataclass
@@ -169,20 +185,29 @@ class TxOutputNavio:
 
     def serialize(self):
         flags = 0
-        if len(self.blsct_data.range_proof.Vs) > 0:
+        # BLSCT_MARKER: rangeProof.Vs.Size() > 0 OR HasBLSCTKeys()
+        # HasBLSCTKeys() = !ephemeralKey.IsZero() || !blindingKey.IsZero() || !spendingKey.IsZero()
+        # Keys are bytes (48 bytes for points), check if any are non-zero
+        has_blsct_keys = (self.blsct_data.ek and len(self.blsct_data.ek) > 0 and not all(b == 0 for b in self.blsct_data.ek)) or \
+                         (self.blsct_data.bk and len(self.blsct_data.bk) > 0 and not all(b == 0 for b in self.blsct_data.bk)) or \
+                         (self.blsct_data.sk and len(self.blsct_data.sk) > 0 and not all(b == 0 for b in self.blsct_data.sk))
+        if len(self.blsct_data.range_proof.Vs) > 0 or has_blsct_keys:
             flags |= 0x1 << 0
         if self.tokenid and not all(b == 0 for b in self.tokenid):
             flags |= 0x1 << 1
         if self.vdata and len(self.vdata) > 0:
             flags |= 0x1 << 2
-        if self.value > 0 and ((self.tokenid and not all(b == 0 for b in self.tokenid) and self.tokennftid != 0x7fffffff) or (self.vdata and len(self.vdata) > 0)):
+        # TRANSPARENT_VALUE_MARKER: value > 0 AND (tokenId.IsNFT() OR predicate.size() > 0)
+        # IsNFT() = token != uint256() && subid != std::numeric_limits<uint64_t>::max()
+        # predicate.size() > 0 = vdata and len(vdata) > 0
+        if self.value > 0 and ((self.tokenid and not all(b == 0 for b in self.tokenid) and self.tokennftid != 0xFFFFFFFFFFFFFFFF) or (self.vdata and len(self.vdata) > 0)):
             flags |= 0x1 << 3
 
         bytes = []
         if flags == 0:
             bytes.append(pack_le_int64(self.value))
         else:
-            bytes.append(pack_le_int64(0x7fffffff))
+            bytes.append(pack_le_int64(0x7FFFFFFFFFFFFFFF))  # 64-bit max, not 32-bit
             bytes.append(pack_le_int64(flags))
             if flags & 0x1 << 3:
                 bytes.append(pack_le_int64(self.value))
@@ -195,6 +220,10 @@ class TxOutputNavio:
         if flags & 0x1 << 2:
             bytes.append(pack_varbytes(self.vdata))
         return b''.join(bytes)
+
+    def get_hash(self):
+        '''Return the output hash (hash of serialized output), matching Navio-core CTxOut::GetHash().'''
+        return double_sha256(self.serialize())
 
 
 @dataclass
@@ -249,11 +278,15 @@ class Deserializer:
         return [read_input() for i in range(self._read_varint())]
 
     def _read_input(self):
+        prev_hash = self._read_nbytes(32)
+        prev_idx = self._read_le_uint32()
+        script = self._read_varbytes()
+        sequence = self._read_le_uint32()
         return TxInput(
-            self._read_nbytes(32),   # prev_hash
-            self._read_le_uint32(),  # prev_idx
-            self._read_varbytes(),   # script
-            self._read_le_uint32()   # sequence
+            prev_hash,
+            prev_idx,
+            script,
+            sequence
         )
 
     def _read_outputs(self):
@@ -274,13 +307,21 @@ class Deserializer:
     def _read_nbytes(self, n):
         cursor = self.cursor
         self.cursor = end = cursor + n
-        assert self.binary_length >= end
+        if self.binary_length < end:
+            raise ValueError(
+                f'Trying to read {n} bytes at position {cursor}, but only '
+                f'{self.binary_length - cursor} bytes available (total length: {self.binary_length})'
+            )
         return self.binary[cursor:end]
 
     def _read_varbytes(self):
         return self._read_nbytes(self._read_varint())
 
     def _read_varint(self):
+        if self.cursor >= self.binary_length:
+            raise ValueError(
+                f'Reading varint at position {self.cursor} but only {self.binary_length} bytes available'
+            )
         n = self.binary[self.cursor]
         self.cursor += 1
         if n < 253:
@@ -289,7 +330,16 @@ class Deserializer:
             return self._read_le_uint16()
         if n == 254:
             return self._read_le_uint32()
-        return self._read_le_uint64()
+        if n == 255:
+            # Check if we have enough bytes for uint64
+            if self.cursor + 8 > self.binary_length:
+                raise ValueError(
+                    f'Reading uint64 varint at position {self.cursor - 1} but only '
+                    f'{self.binary_length - self.cursor + 1} bytes available (need 8)'
+                )
+            return self._read_le_uint64()
+        # Should never reach here, but just in case
+        raise ValueError(f'Invalid varint prefix byte: 0x{n:02x} at position {self.cursor - 1}')
 
     def _read_le_int32(self):
         result, = unpack_le_int32_from(self.binary, self.cursor)
@@ -360,6 +410,19 @@ class DeserializerTxNavio(Deserializer):
         read_varbytes = self._read_varbytes
         return [read_varbytes() for _ in range(self._read_varint())]
     
+    def _read_input(self):
+        '''Navio inputs: prevout.hash (32 bytes), scriptSig (varbytes), nSequence (4 bytes).
+        Note: Navio does NOT have prev_idx - it uses hash-only outpoints.'''
+        prev_hash = self._read_nbytes(32)  # prevout.hash (output hash, not tx hash)
+        script = self._read_varbytes()  # scriptSig
+        sequence = self._read_le_uint32()  # nSequence
+        return TxInput(
+            prev_hash,
+            0,  # prev_idx is always 0 for Navio (hash-only outpoints)
+            script,
+            sequence
+        )
+    
     def _read_outputs(self):
         read_output = self._read_output
         return [read_output() for i in range(self._read_varint())]
@@ -369,7 +432,7 @@ class DeserializerTxNavio(Deserializer):
         sk = self.read_point()
         bk = self.read_point()
         ek = self.read_point()
-        view_tag = self._read_be_uint16()   
+        view_tag = self._read_le_uint16()  # uint16_t is little-endian in Bitcoin/Navio
         return TxBlsctDataNavio(range_proof, sk, ek, bk, view_tag)
 
     def _read_output(self):
@@ -404,7 +467,9 @@ class DeserializerTxNavio(Deserializer):
 
     def read_tx_no_segwit(self, start):
         version = self._read_le_int32()
+        input_start = self.cursor
         inputs = self._read_inputs()
+        input_end = self.cursor
         outputs = self._read_outputs()
         locktime = self._read_le_uint32()
         txsig = b''
@@ -422,6 +487,12 @@ class DeserializerTxNavio(Deserializer):
     def _read_tx_parts(self):
         '''Return a (deserialized TX, tx_hash, vsize) tuple.'''
         start = self.cursor
+        # Check marker byte (5th byte of transaction, after 4-byte version)
+        if self.cursor + 4 >= self.binary_length:
+            raise ValueError(
+                f'Not enough bytes to read transaction marker at position {self.cursor + 4} '
+                f'(only {self.binary_length} bytes available)'
+            )
         marker = self.binary[self.cursor + 4]
         if marker:
             tx = self.read_tx_no_segwit(start)
@@ -517,6 +588,9 @@ class DeserializerTxNavio(Deserializer):
         if len(Vs) > 0:
             Ls = self.read_points()
             Rs = self.read_points()
+        else:
+            Ls = []
+            Rs = []
         A = self.read_point()
         A_wip = self.read_point()
         B = self.read_point()
@@ -543,6 +617,18 @@ class DeserializerTxNavio(Deserializer):
 
     def read_pos_proof(self):
         start = self.cursor
-        self.read_set_mem_proof()
-        self.read_range_proof_without_v()
-        return self.cursor - start
+        try:
+            self.read_set_mem_proof()
+            self.read_range_proof_without_v()
+        except (ValueError, IndexError) as e:
+            raise ValueError(
+                f'Failed to read PoS proof at position {start}: {e}. '
+                f'Available bytes: {self.binary_length - start}, total: {self.binary_length}'
+            ) from e
+        offset = self.cursor - start
+        if offset < 0 or self.cursor > self.binary_length:
+            raise ValueError(
+                f'Invalid PoS proof offset {offset} calculated at position {start}. '
+                f'Cursor moved to {self.cursor}, but block length is {self.binary_length}'
+            )
+        return offset

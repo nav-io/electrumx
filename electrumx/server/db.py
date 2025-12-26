@@ -97,12 +97,12 @@ class DB:
         self.db_class = db_class(self.env.db_engine)
         self.history = History()
 
-        # Key: b'u' + address_hashX + tx_num + txout_idx
-        # Value: the UTXO value as a 64-bit unsigned integer (in satoshis)
+        # Key: b'u' + address_hashX + tx_num + output_hash
+        # Value: value (8)
         # "at address, at outpoint, there is a UTXO of value v"
         # ---
-        # Key: b'h' + tx_num + txout_idx
-        # Value: hashX
+        # Key: b'h' + output_hash
+        # Value: hashX + tx_num
         # "some outpoint created a UTXO at address"
         # ---
         # Key: b'U' + block_height
@@ -293,7 +293,6 @@ class DB:
                                        else 0)
         assert len(self.tx_counts) == flush_data.height + 1
         hashes = b''.join(flush_data.block_tx_hashes)
-        flush_data.block_tx_hashes.clear()
         assert len(hashes) % 32 == 0
         assert len(hashes) // 32 == flush_data.tx_count - prior_tx_count
 
@@ -310,7 +309,16 @@ class DB:
                                   self.tx_counts[height_start:].tobytes())
         offset = prior_tx_count * 32
         self.hashes_file.write(offset, hashes)
-
+        
+        # Store tx_hashes per block height in database for fast lookups
+        # This avoids reading from the sequential file each time
+        # Each element in block_tx_hashes is the concatenated hashes for one block
+        for idx, block_hashes in enumerate(flush_data.block_tx_hashes):
+            height = height_start + idx
+            block_key = b'B' + pack_be_uint32(height)
+            self.tx_db.put(block_key, block_hashes)
+        
+        flush_data.block_tx_hashes.clear()
         self.fs_height = flush_data.height
         self.fs_tx_count = flush_data.tx_count
 
@@ -339,14 +347,12 @@ class DB:
         # New UTXOs
         batch_put = batch.put
         for key, value in flush_data.adds.items():
-            # key: txid+out_idx, value: hashX+tx_num+value_sats
+            # key: output_hash, value: hashX+tx_num+value_sats
             hashX = value[:HASHX_LEN]
-            txout_idx = key[-TXOUTIDX_LEN:]
             tx_num = value[HASHX_LEN: HASHX_LEN+TXNUM_LEN]
             value_sats = value[-8:]
-            suffix = tx_num + txout_idx
-            batch_put(b'h' + suffix, hashX)
-            batch_put(b'u' + hashX + suffix, value_sats)
+            batch_put(b'h' + key, hashX + tx_num)
+            batch_put(b'u' + hashX + tx_num + key, value_sats)
         flush_data.adds.clear()
 
         # New undo information
@@ -399,6 +405,20 @@ class DB:
             spends=flush_data.undo_historical_spends,
         )
         flush_data.undo_historical_spends.clear()
+        
+        # Delete tx_keys and block index entries for disconnected blocks
+        # Delete block index entries (b'B' + height) for heights being disconnected
+        with self.tx_db.write_batch() as batch:
+            for tx_hash in tx_hashes:
+                # Delete tx_keys (b'k' + tx_hash) for disconnected transactions
+                tx_keys_key = b'k' + tx_hash
+                batch.delete(tx_keys_key)
+            
+            # Delete block index entries for all heights being disconnected
+            for height in range(flush_data.height + 1, self.db_height + 1):
+                block_key = b'B' + pack_be_uint32(height)
+                batch.delete(block_key)
+        
         with self.utxo_db.write_batch() as batch:
             self.flush_utxo_db(batch, flush_data)
             # Flush state last as it reads the wall time.
@@ -487,6 +507,17 @@ class DB:
         if block_height > self.db_height:
             raise self.DBError(f'block {block_height:,d} not on disk (>{self.db_height:,d})')
         assert block_height >= 0
+        
+        # Try to get from database cache first (much faster than reading from sequential file)
+        block_key = b'B' + pack_be_uint32(block_height)
+        cached_hashes = self.tx_db.get(block_key)
+        
+        if cached_hashes is not None:
+            # Deserialize: concatenated 32-byte hashes
+            num_txs = len(cached_hashes) // 32
+            return [cached_hashes[idx * 32: (idx+1) * 32] for idx in range(num_txs)]
+        
+        # Fallback to reading from sequential file (for backwards compatibility)
         if block_height > 0:
             first_tx_num = self.tx_counts[block_height - 1]
         else:
@@ -494,7 +525,12 @@ class DB:
         num_txs_in_block = self.tx_counts[block_height] - first_tx_num
         tx_hashes = self.hashes_file.read(first_tx_num * 32, num_txs_in_block * 32)
         assert num_txs_in_block == len(tx_hashes) // 32
-        return [tx_hashes[idx * 32: (idx+1) * 32] for idx in range(num_txs_in_block)]
+        tx_hashes_list = [tx_hashes[idx * 32: (idx+1) * 32] for idx in range(num_txs_in_block)]
+        
+        # Cache it in the database for future lookups
+        self.tx_db.put(block_key, tx_hashes)
+        
+        return tx_hashes_list
 
     async def tx_hashes_at_blockheight(self, block_height):
         return await run_in_thread(self.fs_tx_hashes_at_blockheight, block_height)
@@ -597,26 +633,27 @@ class DB:
         '''For an outpoint, returns its spend-status (considering only the DB,
         not the mempool).
         '''
-        prev_txnum = self.fs_txnum_for_txhash(prev_txhash)
-        if prev_txnum is None:  # outpoint never existed (in chain)
-            return TXOSpendStatus(prev_height=None)
-        prev_height = self.get_blockheight_and_txpos_for_txnum(prev_txnum)[0]
-        hashx, _ = self._get_hashX_for_utxo(prev_txhash, txout_idx)
-        if hashx:  # outpoint exists and is unspent
-            return TXOSpendStatus(prev_height=prev_height)
-        # by now we know prev_txhash was mined, and
-        # txout_idx was either spent or is out-of-bounds
-        spender_txnum = self.history.get_spender_txnum_for_txo(prev_txnum, txout_idx)
+        # prev_txhash is output_hash
+        # Check if unspent
+        hashX, suffix = self._get_hashX_for_utxo(prev_txhash, 0)
+        if hashX:
+             # Unspent. suffix is tx_num + output_hash. 
+             # We need to extract tx_num from suffix to get height.
+             tx_numb = suffix[:TXNUM_LEN]
+             tx_num = unpack_txnum(tx_numb)
+             
+             if self.utxo_db.get(b'u' + hashX + suffix):
+                 height, _ = self.get_blockheight_and_txpos_for_txnum(tx_num)
+                 return TXOSpendStatus(prev_height=height)
+        
+        # Spent?
+        spender_txnum = self.history.get_spender_txnum_for_txo(prev_txhash)
         if spender_txnum is None:
-            # txout_idx was out-of-bounds
             return TXOSpendStatus(prev_height=None)
-        # by now we know the outpoint exists and it was spent.
+            
         spender_txhash, spender_height = self.fs_tx_hash(spender_txnum)
-        if spender_txhash is None:
-            # not sure if this can happen. maybe through a race?
-            return TXOSpendStatus(prev_height=prev_height)
         return TXOSpendStatus(
-            prev_height=prev_height,
+            prev_height=-1, # Unknown as we don't store creation height for spent outputs
             spender_txhash=spender_txhash,
             spender_height=spender_height,
         )
@@ -684,13 +721,169 @@ class DB:
         prefix = b'k' + hash
         keys = self.tx_db.get(prefix)
         if keys:
-            return ast.literal_eval(keys.decode())
+            # Use JSON for faster deserialization (much faster than ast.literal_eval)
+            import json
+            return json.loads(keys.decode())
         return None
 
     def write_tx_keys(self, keys, hash):
         '''Write tx keys to disk'''
         prefix = b'k' + hash
-        return self.tx_db.put(prefix, repr(keys).encode())
+        # Use JSON for faster serialization/deserialization
+        import json
+        return self.tx_db.put(prefix, json.dumps(keys).encode())
+
+    def write_output_hash_to_tx_hash(self, output_hash, tx_hash, serialized_output):
+        '''Write output_hash -> serialized_output mapping (Navio-specific: for looking up outputs by hash)
+        
+        Note: output_hash from get_hash() is in internal format (not reversed).
+        But users pass output hashes in display format (reversed), and hex_str_to_hash() reverses them.
+        So we need to reverse the hash here to display format to match what users will look up.
+        
+        Stores the serialized output directly for fast retrieval.
+        '''
+        # Ensure output_hash is exactly 32 bytes
+        if len(output_hash) != 32:
+            self.logger.error(f'write_output_hash_to_tx_hash: output_hash length is {len(output_hash)}, expected 32! hash={output_hash.hex()}')
+            return
+        if serialized_output is None:
+            self.logger.error(f'write_output_hash_to_tx_hash: serialized_output is required!')
+            return
+        # Reverse the hash to display format (what users will pass in)
+        # get_hash() returns internal format, but users pass display format
+        output_hash_display = output_hash[::-1]  # Reverse bytes to display format
+        # Store serialized output directly for fast retrieval
+        output_prefix = b'O' + output_hash_display
+        self.tx_db.put(output_prefix, serialized_output)
+        # Note: LevelDB/RocksDB put() is immediate, no flush needed
+    
+    def read_serialized_output(self, output_hash):
+        '''Read serialized output directly (Navio-specific, optimized for fast retrieval)
+        
+        Returns the serialized output bytes if found, None otherwise.
+        '''
+        # Ensure output_hash is exactly 32 bytes
+        if len(output_hash) != 32:
+            return None
+        
+        # Reverse the hash to display format (what we stored)
+        output_hash_display = output_hash[::-1]  # Reverse bytes to display format
+        output_prefix = b'O' + output_hash_display  # 'O' (uppercase) for serialized output
+        result = self.tx_db.get(output_prefix)
+        
+        return result
+
+    async def get_tx_keys(self, hash):
+        '''Returns tx keys for a confirmed tx_hash.'''
+        return await run_in_thread(self.read_tx_keys, hash)
+
+    async def get_block_txs_keys(self, height):
+        '''Returns a list of tx keys for a given block height.'''
+        total_start = time.monotonic()
+        
+        # Get tx hashes
+        tx_hashes_start = time.monotonic()
+        tx_hashes = await self.tx_hashes_at_blockheight(height)
+        tx_hashes_time = time.monotonic() - tx_hashes_start
+        
+        if tx_hashes:
+            # Read all tx_keys in parallel for much better performance
+            import asyncio
+            
+            async def get_tx_keys_async(tx_hash):
+                return await run_in_thread(self.read_tx_keys, tx_hash)
+            
+            # Read all keys in parallel
+            read_keys_start = time.monotonic()
+            keys_list = await asyncio.gather(*[get_tx_keys_async(tx_hash) for tx_hash in tx_hashes])
+            read_keys_time = time.monotonic() - read_keys_start
+            
+            # Format results
+            format_start = time.monotonic()
+            result = [(hash_to_hex_str(tx_hash), keys) for tx_hash, keys in zip(tx_hashes, keys_list) if keys is not None]
+            format_time = time.monotonic() - format_start
+            
+            total_time = time.monotonic() - total_start
+            self.logger.info(f'[BENCH] get_block_txs_keys(height={height}): '
+                           f'tx_hashes={tx_hashes_time*1000:.2f}ms, read_keys={read_keys_time*1000:.2f}ms, '
+                           f'format={format_time*1000:.2f}ms, total={total_time*1000:.2f}ms, '
+                           f'num_txs={len(tx_hashes)}, num_keys={len(result)}')
+            return result
+        
+        total_time = time.monotonic() - total_start
+        self.logger.info(f'[BENCH] get_block_txs_keys(height={height}): total={total_time*1000:.2f}ms, num_txs=0')
+        return []
+
+    async def get_range_txs_keys(self, start_height, count, max_size=10*1024*1024):
+        '''Returns as many tx keys as possible starting from the given block height.
+        Returns (blocks, next_height).
+        blocks is a list of blocks, where each block is a list of (tx_hash, keys).
+        Fetches blocks until response size would exceed max_size, we hit the requested
+        count, or we reach the chain tip.  next_height is where the client should
+        resume fetching.
+        '''
+        import json
+
+        if start_height > self.db_height or count == 0:
+            return [], start_height
+
+        end_height = min(self.db_height, start_height + count - 1)
+        heights = list(range(start_height, end_height + 1))
+
+        # Batch 1: fetch tx hashes for all requested heights
+        def batch_get_tx_hashes(heights_list):
+            results = {}
+            for height in heights_list:
+                try:
+                    results[height] = self.fs_tx_hashes_at_blockheight(height)
+                except Exception:
+                    results[height] = None
+            return results
+
+        all_tx_hashes = await run_in_thread(batch_get_tx_hashes, heights)
+
+        # Collect all tx hashes to look up keys in a single batch
+        all_tx_hashes_flat = []
+        for height in heights:
+            tx_hashes = all_tx_hashes.get(height)
+            if tx_hashes:
+                all_tx_hashes_flat.extend(tx_hashes)
+
+        def batch_get_tx_keys(tx_hashes_list):
+            results = {}
+            for tx_hash in sorted(tx_hashes_list):
+                results[tx_hash] = self.read_tx_keys(tx_hash)
+            return results
+
+        all_tx_keys = await run_in_thread(batch_get_tx_keys, all_tx_hashes_flat)
+
+        # Assemble results in order while respecting the size limit
+        blocks = []
+        current_size = 0
+        next_height = start_height
+
+        for height in heights:
+            tx_hashes = all_tx_hashes.get(height) or []
+            block_keys = []
+            for tx_hash in tx_hashes:
+                keys = all_tx_keys.get(tx_hash)
+                if keys is not None:
+                    block_keys.append((hash_to_hex_str(tx_hash), keys))
+
+            block_size = len(json.dumps(block_keys, separators=(',', ':')))
+
+            # If adding this block exceeds max_size and we already have blocks, stop here
+            if current_size + block_size > max_size and blocks:
+                break
+
+            blocks.append(block_keys)
+            current_size += block_size
+            next_height = height + 1
+
+            if current_size >= max_size:
+                break
+
+        return blocks, next_height
 
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''
@@ -796,16 +989,21 @@ class DB:
         def read_utxos():
             utxos = []
             utxos_append = utxos.append
-            # Key: b'u' + address_hashX + tx_num + txout_idx
-            # Value: the UTXO value as a 64-bit unsigned integer
+            # Key: b'u' + address_hashX + tx_num + output_hash
+            # Value: value (8)
             prefix = b'u' + hashX
             for db_key, db_value in self.utxo_db.iterator(prefix=prefix):
-                txout_idx, = unpack_le_uint32(db_key[-TXOUTIDX_LEN:] + TXOUTIDX_PADDING)
-                tx_numb = db_key[-TXOUTIDX_LEN-TXNUM_LEN:-TXOUTIDX_LEN]
+                # output_hash is the last 32 bytes
+                # tx_num is before that
+                
+                tx_numb = db_key[len(prefix):len(prefix)+TXNUM_LEN]
                 tx_num = unpack_txnum(tx_numb)
+                
                 value, = unpack_le_uint64(db_value)
+                
                 tx_hash, height = self.fs_tx_hash(tx_num)
-                utxos_append(UTXO(tx_num, txout_idx, tx_hash, height, value))
+                # tx_pos is not stored, assuming 0 or irrelevant for this coin type
+                utxos_append(UTXO(tx_num, 0, tx_hash, height, value))
             return utxos
 
         while True:
@@ -819,19 +1017,17 @@ class DB:
     def _get_hashX_for_utxo(
             self, tx_hash: bytes, txout_idx: int,
     ) -> Tuple[Optional[bytes], Optional[bytes]]:
-        idx_packed = pack_le_uint32(txout_idx)[:TXOUTIDX_LEN]
-        tx_num = self.fs_txnum_for_txhash(tx_hash)
-        if tx_num is None:
+        # tx_hash is output_hash here. txout_idx is ignored.
+        
+        # Key: b'h' + output_hash
+        # Value: hashX + tx_num
+        db_key = b'h' + tx_hash
+        hdb_val = self.utxo_db.get(db_key)
+        if hdb_val is None:
             return None, None
-        tx_numb = pack_txnum(tx_num)
-
-        # Key: b'h' + tx_num + txout_idx
-        # Value: hashX
-        db_key = b'h' + tx_numb + idx_packed
-        hashX = self.utxo_db.get(db_key)
-        if hashX is None:
-            return None, None
-        return hashX, tx_numb + idx_packed
+        hashX = hdb_val[:HASHX_LEN]
+        tx_numb = hdb_val[HASHX_LEN:]
+        return hashX, tx_numb + tx_hash
 
     async def lookup_utxos(self, prevouts):
         '''For each prevout, lookup it up in the DB and return a (hashX,
@@ -853,8 +1049,8 @@ class DB:
                     # of us and has mempool txs spending outputs from
                     # that new block
                     return None
-                # Key: b'u' + address_hashX + tx_num + txout_idx
-                # Value: the UTXO value as a 64-bit unsigned integer
+                # Key: b'u' + address_hashX + tx_num + output_hash
+                # Suffix is tx_num + output_hash
                 key = b'u' + hashX + suffix
                 db_value = self.utxo_db.get(key)
                 if not db_value:

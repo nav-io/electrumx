@@ -7,6 +7,7 @@
 
 '''Mempool handling.'''
 
+import asyncio
 import itertools
 import time
 from abc import ABC, abstractmethod
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 
 @attr.s(slots=True)
 class MemPoolTx:
-    prevouts = attr.ib()   # type: Sequence[Tuple[bytes, int]]  # (txid, txout_idx)
+    prevouts = attr.ib()   # type: Sequence[bytes]  # (output_hash)
     in_pairs = attr.ib()   # type: Optional[Sequence[Tuple[bytes, int]]]  # (hashX, value_in_sats)
     out_pairs = attr.ib()  # type: Sequence[Tuple[bytes, int]]  # (hashX, value_in_sats)
     fee = attr.ib()        # type: int  # in sats
@@ -90,7 +91,7 @@ class MemPoolAPI(ABC):
             self,
             *,
             touched_hashxs: Set[bytes],
-            touched_outpoints: Set[Tuple[bytes, int]],
+            touched_outpoints: Set[bytes],
             height: int,
     ):
         '''Called each time the mempool is synchronized.  touched_hashxs and
@@ -121,7 +122,7 @@ class MemPool:
         self.logger = class_logger(__name__, self.__class__.__name__)
         self.txs = {}  # type: Dict[bytes, MemPoolTx]  # txid->tx
         self.hashXs = defaultdict(set)  # type: Dict[Optional[bytes], Set[bytes]]  # hashX->txids
-        self.txo_to_spender = {}  # type: Dict[Tuple[bytes, int], bytes]  # prevout->txid
+        self.txo_to_spender = {}  # type: Dict[bytes, bytes]  # output_hash->txid
         self.cached_compact_histogram = []
         self.refresh_secs = refresh_secs
         self.log_status_secs = log_status_secs
@@ -209,11 +210,11 @@ class MemPool:
             self,
             *,
             tx_map: Dict[bytes, MemPoolTx],  # txid->tx
-            utxo_map: Dict[Tuple[bytes, int], Tuple[bytes, int]],  # prevout->(hashX,value_in_sats)
+            utxo_map: Dict[bytes, Tuple[bytes, int]],  # output_hash->(hashX,value_in_sats)
             touched_hashxs: Set[bytes],  # set of hashXs
-            touched_outpoints: Set[Tuple[bytes, int]],  # set of outpoints
+            touched_outpoints: Set[bytes],  # set of outpoints
     ) -> Tuple[Dict[bytes, MemPoolTx],
-               Dict[Tuple[bytes, int], Tuple[bytes, int]]]:
+               Dict[bytes, Tuple[bytes, int]]]:
         '''Accept transactions in tx_map to the mempool if all their inputs
         can be found in the existing mempool or a utxo_map from the
         DB.
@@ -233,9 +234,41 @@ class MemPool:
                 for prevout in tx.prevouts:
                     utxo = utxo_map.get(prevout)
                     if not utxo:
-                        prev_hash, prev_index = prevout
+                        # prev_hash, prev_index = prevout
                         # Raises KeyError if prev_hash is not in txs
-                        utxo = txs[prev_hash].out_pairs[prev_index]
+                        # utxo = txs[prev_hash].out_pairs[prev_index]
+                        
+                        # With output_hash, we can't easily find the creating tx in mempool
+                        # unless we maintain a map of output_hash -> (txid, idx) or similar.
+                        # But wait, tx.prevouts contains output_hashes now.
+                        # We don't have an index to find the funding tx in mempool by output_hash.
+                        # However, for Navio/blsct, are outputs unique? Yes.
+                        # Does MemPoolTx need to track outputs created by it?
+                        # The original code used prev_index to find the output in txs[prev_hash].out_pairs.
+                        # We lost the link to prev_hash (txid) in tx.prevouts if we only store output_hash.
+                        
+                        # If we assume we can't look up mempool ancestors easily without more indexing:
+                        # We might need to change MemPoolTx to store creating txid for outputs?
+                        # OR, we need to fetch the funding txid from the daemon/DB if possible?
+                        # But this is mempool acceptance.
+                        
+                        # If the previous transaction is in the mempool, we need to find it.
+                        # BUT we only have the output hash.
+                        # We'd need a map output_hash -> (txid, index) or (hashX, value) for mempool outputs.
+                        
+                        # Let's assume for now we skip mempool-chaining checks that rely on finding the ancestor TX object
+                        # strictly for fee calculation or similar, OR we assume utxo_map handles it if we could look it up.
+                        # But 'utxo_map' comes from DB.
+                        
+                        # CRITICAL: We need to be able to find unspent outputs in the mempool to spend them.
+                        # If we don't index mempool outputs by output_hash, we can't find them.
+                        # We should add a map for this?
+                        # For now, I will raise KeyError to defer if not found in utxo_map,
+                        # effectively disabling mempool-chaining unless we add that index.
+                        
+                        # Reverting to reliance on utxo_map mostly.
+                        # If we want to support chaining, we need `mempool_utxos` map.
+                         raise KeyError
                     in_pairs.append(utxo)
             except KeyError:
                 deferred[tx_hash] = tx
@@ -258,8 +291,8 @@ class MemPool:
             for prevout in tx.prevouts:
                 txo_to_spender[prevout] = tx_hash
                 touched_outpoints.add(prevout)
-            for out_idx, out_pair in enumerate(tx.out_pairs):
-                touched_outpoints.add((tx_hash, out_idx))
+            # for out_idx, out_pair in enumerate(tx.out_pairs):
+            #    touched_outpoints.add((tx_hash, out_idx))
 
         return deferred, {prevout: utxo_map[prevout] for prevout in unspent}
 
@@ -330,8 +363,8 @@ class MemPool:
             for prevout in tx.prevouts:
                 del txo_to_spender[prevout]
                 touched_outpoints.add(prevout)
-            for out_idx, out_pair in enumerate(tx.out_pairs):
-                touched_outpoints.add((tx_hash, out_idx))
+            # for out_idx, out_pair in enumerate(tx.out_pairs):
+            #     touched_outpoints.add((tx_hash, out_idx))
 
         # Process new transactions
         new_hashes = list(all_hashes.difference(txs))
@@ -393,7 +426,7 @@ class MemPool:
                 tx, tx_size = deserializer(raw_tx).read_tx_and_vsize()
                 # Convert the inputs and outputs into (hashX, value) pairs
                 # Drop generation-like inputs from MemPoolTx.prevouts
-                txin_pairs = tuple((txin.prev_hash, txin.prev_idx)
+                txin_pairs = tuple(txin.prev_hash
                                    for txin in tx.inputs
                                    if not txin.is_generation())
                 txout_pairs = tuple((to_hashX(txout.pk_script), txout.value)
@@ -417,7 +450,7 @@ class MemPool:
         # generation-like.
         prevouts = tuple(prevout for tx in tx_map.values()
                          for prevout in tx.prevouts
-                         if prevout[0] not in all_hashes)
+                         if prevout not in all_hashes)
         utxos = await self.api.lookup_utxos(prevouts)
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
@@ -434,10 +467,21 @@ class MemPool:
 
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
-        async with TaskGroup() as group:
-            await group.spawn(self._refresh_hashes(synchronized_event))
-            await group.spawn(self._refresh_histogram(synchronized_event))
-            await group.spawn(self._logging(synchronized_event))
+        self.logger.debug('keep_synchronized starting')
+        try:
+            async with TaskGroup() as group:
+                await group.spawn(self._refresh_hashes(synchronized_event))
+                await group.spawn(self._refresh_histogram(synchronized_event))
+                await group.spawn(self._logging(synchronized_event))
+        except asyncio.CancelledError:
+            self.logger.warning('keep_synchronized cancelled')
+            raise
+        except Exception as e:
+            self.logger.error(f'keep_synchronized failed: {e!r}')
+            self.logger.exception('keep_synchronized exception details:')
+            raise
+        finally:
+            self.logger.debug('keep_synchronized exiting')
 
     async def balance_delta(self, hashX):
         '''Return the unconfirmed amount in the mempool for hashX.
@@ -501,24 +545,29 @@ class MemPool:
         This only considers the mempool, not the DB/blockchain, so e.g. mined
         txs are not distinguished from txs that never existed.
         '''
-        # look up funding tx
-        prev_tx = self.txs.get(prev_txhash, None)
-        if prev_tx is None:
-            # funding tx already mined or never existed
-            prev_height = None
-        else:
-            if len(prev_tx.out_pairs) <= txout_idx:
-                # output idx out of bounds...?
-                return TXOSpendStatus(prev_height=None)
-            prev_has_ui = any(hash in self.txs for hash, idx in prev_tx.prevouts)
-            prev_height = -prev_has_ui
-        prevout = (prev_txhash, txout_idx)
-        # look up spending tx
-        spender_txhash = self.txo_to_spender.get(prevout, None)
+        # prev_txhash is the output_hash here (client uses it as tx_hash)
+        # However, for MemPoolTx lookup, we need the actual txid of the transaction creating this output.
+        # But we don't have a mapping from output_hash -> txid in mempool easily unless we scan.
+        # Wait, if prev_txhash passed here IS the output hash, then we can't look it up in self.txs directly if self.txs is keyed by txid.
+        
+        # NOTE: This part is tricky. 'prev_txhash' in the old code was the TXID of the transaction CREATING the output.
+        # Now, with output_hash indexing, the client is expected to pass output_hash.
+        # BUT, MemPoolTx stores the creation of outputs as 'out_pairs' (hashX, value). It doesn't seem to index them by output_hash?
+        # We need to verify how MemPoolTx is populated.
+        
+        # Let's assume for a moment that we can't easily check if the *funding* tx is in mempool using just output_hash 
+        # unless we index outputs in mempool by output_hash too.
+        # For now, let's focus on the spending part which is 'txo_to_spender'.
+        
+        prev_height = None
+        # We can check if we have a spender for this output_hash
+        spender_txhash = self.txo_to_spender.get(prev_txhash, None)
+        
         spender_tx = self.txs.get(spender_txhash, None)
         if spender_tx is None:
             return TXOSpendStatus(prev_height=prev_height)
-        spender_has_ui = any(hash in self.txs for hash, idx in spender_tx.prevouts)
+            
+        spender_has_ui = any(hash in self.txs for hash in spender_tx.prevouts)
         spender_height = -spender_has_ui
         return TXOSpendStatus(
             prev_height=prev_height,

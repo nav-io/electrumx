@@ -145,11 +145,9 @@ class History:
 
         skeys = []
         for db_key, db_val in self.db.iterator(prefix=b's'):
-            tx_numb1 = db_key[1:1+TXNUM_LEN]
             tx_numb2 = db_val
-            tx_num1 = unpack_txnum(tx_numb1)
             tx_num2 = unpack_txnum(tx_numb2)
-            if max(tx_num1, tx_num2) >= utxo_db_tx_count:
+            if tx_num2 >= utxo_db_tx_count:
                 skeys.append(db_key)
 
         self.logger.info(f'deleting {len(hkeys):,d} addr entries,'
@@ -179,7 +177,7 @@ class History:
             hashXs_by_tx: Sequence[Sequence[bytes]],
             first_tx_num: int,
             txhash_to_txnum_map: Dict[bytes, int],
-            txo_to_spender_map: Dict[Tuple[bytes, int], bytes],  # (tx_hash, txout_idx) -> tx_hash
+            txo_to_spender_map: Dict[bytes, bytes],  # output_hash -> tx_hash
     ):
         unflushed_hashxs = self._unflushed_hashxs
         count = 0
@@ -199,14 +197,10 @@ class History:
 
         unflushed_spenders = self._unflushed_txo_to_spender
         get_txnum_for_txhash = self.get_txnum_for_txhash
-        for (prev_hash, prev_idx), spender_hash in txo_to_spender_map.items():
-            prev_txnum = get_txnum_for_txhash(prev_hash)
-            assert prev_txnum is not None
+        for prev_hash, spender_hash in txo_to_spender_map.items():
             spender_txnum = get_txnum_for_txhash(spender_hash)
             assert spender_txnum is not None
-            prev_idx_packed = pack_le_uint32(prev_idx)[:TXOUTIDX_LEN]
-            prev_txnumb = pack_txnum(prev_txnum)
-            unflushed_spenders[prev_txnumb+prev_idx_packed] = spender_txnum
+            unflushed_spenders[prev_hash] = spender_txnum
 
     def unflushed_memsize(self):
         # note: the magic numbers here were estimated using util.deep_getsizeof
@@ -284,13 +278,7 @@ class History:
                 for key in deletes:
                     batch.delete(key)
             for spend in spends:
-                prev_hash = spend[:32]
-                prev_idx = spend[32:]
-                assert len(prev_idx) == TXOUTIDX_LEN
-                prev_txnum = get_txnum_for_txhash(prev_hash)
-                assert prev_txnum is not None
-                prev_txnumb = pack_txnum(prev_txnum)
-                db_key = b's' + prev_txnumb + prev_idx
+                db_key = b's' + spend
                 batch.delete(db_key)
             for tx_hash in sorted(tx_hashes):
                 db_key = b't' + tx_hash
@@ -346,16 +334,13 @@ class History:
                 tx_num = unpack_txnum(tx_numb)
         return tx_num
 
-    def get_spender_txnum_for_txo(self, prev_txnum: int, txout_idx: int) -> Optional[int]:
+    def get_spender_txnum_for_txo(self, output_hash: bytes) -> Optional[int]:
         '''For an outpoint, returns the tx_num that spent it.
         If the outpoint is unspent, or even if it never existed (!), returns None.
         '''
-        prev_idx_packed = pack_le_uint32(txout_idx)[:TXOUTIDX_LEN]
-        prev_txnumb = pack_txnum(prev_txnum)
-        prevout = prev_txnumb + prev_idx_packed
-        spender_txnum = self._unflushed_txhash_to_txnum_map.get(prevout)
+        spender_txnum = self._unflushed_txo_to_spender.get(output_hash)
         if spender_txnum is None:
-            db_key = b's' + prevout
+            db_key = b's' + output_hash
             spender_txnumb = self.db.get(db_key)
             if spender_txnumb:
                 spender_txnum = unpack_txnum(spender_txnumb)

@@ -81,7 +81,25 @@ class LevelDB(Storage):
 
     @classmethod
     def import_module(cls):
-        import plyvel
+        try:
+            import plyvel
+        except ImportError as e:
+            error_msg = str(e)
+            if 'symbol not found' in error_msg or '__ZTIN7leveldb10ComparatorE' in error_msg:
+                raise ImportError(
+                    f'Failed to import plyvel: {error_msg}\n'
+                    'This is caused by a C++ RTTI (Runtime Type Information) mismatch.\n'
+                    'The LevelDB library was compiled without RTTI, but plyvel requires it.\n\n'
+                    'Recommended solution: Use RocksDB instead:\n'
+                    '  1. Install RocksDB: brew install rocksdb\n'
+                    '  2. Install Python bindings: pip install python-rocksdb\n'
+                    '  3. Set environment variable: export DB_ENGINE=rocksdb\n'
+                    '  4. Run electrumx_server again\n\n'
+                    'Alternative: Build LevelDB with RTTI enabled (more complex):\n'
+                    '  This requires modifying the Homebrew formula or building from source\n'
+                    '  with CMAKE_CXX_FLAGS="-frtti" set during compilation.\n'
+                ) from e
+            raise
         cls.module = plyvel
 
     def open(self, name, create):

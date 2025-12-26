@@ -6,7 +6,8 @@
 # and warranty status of this software.
 
 from asyncio import Event
-from typing import Set, Dict, Tuple
+from typing import Set, Dict
+import asyncio
 
 from aiorpcx import _version as aiorpcx_version, TaskGroup
 
@@ -34,8 +35,8 @@ class Notifications:
     def __init__(self):
         self._touched_hashxs_mp = {}  # type: Dict[int, Set[bytes]]
         self._touched_hashxs_bp = {}  # type: Dict[int, Set[bytes]]
-        self._touched_outpoints_mp = {}  # type: Dict[int, Set[Tuple[bytes, int]]]
-        self._touched_outpoints_bp = {}  # type: Dict[int, Set[Tuple[bytes, int]]]
+        self._touched_outpoints_mp = {}  # type: Dict[int, Set[bytes]]
+        self._touched_outpoints_bp = {}  # type: Dict[int, Set[bytes]]
         self._highest_block = -1
 
     async def _maybe_notify(self):
@@ -75,7 +76,7 @@ class Notifications:
             self,
             *,
             touched_hashxs: Set[bytes],
-            touched_outpoints: Set[Tuple[bytes, int]],
+            touched_outpoints: Set[bytes],
             height: int,
     ):
         pass
@@ -93,7 +94,7 @@ class Notifications:
             self,
             *,
             touched_hashxs: Set[bytes],
-            touched_outpoints: Set[Tuple[bytes, int]],
+            touched_outpoints: Set[bytes],
             height: int,
     ):
         self._touched_hashxs_mp[height] = touched_hashxs
@@ -104,7 +105,7 @@ class Notifications:
             self,
             *,
             touched_hashxs: Set[bytes],
-            touched_outpoints: Set[Tuple[bytes, int]],
+            touched_outpoints: Set[bytes],
             height: int,
     ):
         self._touched_hashxs_bp[height] = touched_hashxs
@@ -165,11 +166,20 @@ class Controller(ServerBase):
             mempool_event = Event()
 
             async def wait_for_catchup():
+                self.logger.debug('wait_for_catchup starting; waiting for caught_up_event')
                 await caught_up_event.wait()
+                self.logger.debug('wait_for_catchup: caught_up_event set; spawning cache + mempool sync')
                 await group.spawn(db.populate_header_merkle_cache())
                 await group.spawn(mempool.keep_synchronized(mempool_event))
+                self.logger.debug('wait_for_catchup: tasks spawned, waiting forever to keep TaskGroup alive')
+                # Wait forever so this task doesn't complete and cause TaskGroup to exit
+                await Event().wait()
 
             async with TaskGroup() as group:
+                self.logger.debug('Controller entering TaskGroup')
                 await group.spawn(session_mgr.serve(notifications, mempool_event))
                 await group.spawn(bp.fetch_and_process_blocks(caught_up_event))
                 await group.spawn(wait_for_catchup())
+                self.logger.debug('Controller TaskGroup body completed; waiting for tasks')
+        self.logger.info('Controller.serve exiting TaskGroup; shutdown_event.is_set=%s',
+                         shutdown_event.is_set())

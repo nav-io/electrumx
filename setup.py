@@ -6,8 +6,15 @@ setuptools.setup(
     version=version,
     scripts=['electrumx_server', 'electrumx_rpc'],
     python_requires='>=3.7',
-    install_requires=['aiorpcX[ws]>=0.18.5,<0.19', 'attrs',
-                      'plyvel', 'pylru', 'aiohttp>=3.3,<4'],
+    install_requires=[
+        # websockets 12+ removed the path argument expected by aiorpcX 0.18.x
+        'aiorpcX[ws]>=0.18.5,<0.19',
+        'attrs',
+        'plyvel',
+        'pylru',
+        'aiohttp>=3.3,<4',
+        'websockets<12',
+    ],
     extras_require={
         'rapidjson': ['python-rapidjson>=0.4.1,<2.0'],
         'rocksdb': ['python-rocksdb>=0.6.9'],
