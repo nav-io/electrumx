@@ -814,76 +814,95 @@ class DB:
         self.logger.info(f'[BENCH] get_block_txs_keys(height={height}): total={total_time*1000:.2f}ms, num_txs=0')
         return []
 
-    async def get_range_txs_keys(self, start_height, count, max_size=10*1024*1024):
+    async def get_range_txs_keys(self, start_height, max_size=10*1024*1024):
         '''Returns as many tx keys as possible starting from the given block height.
         Returns (blocks, next_height).
         blocks is a list of blocks, where each block is a list of (tx_hash, keys).
-        Fetches blocks until response size would exceed max_size, we hit the requested
-        count, or we reach the chain tip.  next_height is where the client should
-        resume fetching.
+        Fetches blocks until response size would exceed max_size or we reach the chain tip.
+        next_height is where the client should resume fetching.
         '''
         import json
 
-        if start_height > self.db_height or count == 0:
+        if start_height > self.db_height:
             return [], start_height
 
-        end_height = min(self.db_height, start_height + count - 1)
-        heights = list(range(start_height, end_height + 1))
-
-        # Batch 1: fetch tx hashes for all requested heights
-        def batch_get_tx_hashes(heights_list):
-            results = {}
-            for height in heights_list:
-                try:
-                    results[height] = self.fs_tx_hashes_at_blockheight(height)
-                except Exception:
-                    results[height] = None
-            return results
-
-        all_tx_hashes = await run_in_thread(batch_get_tx_hashes, heights)
-
-        # Collect all tx hashes to look up keys in a single batch
-        all_tx_hashes_flat = []
-        for height in heights:
-            tx_hashes = all_tx_hashes.get(height)
-            if tx_hashes:
-                all_tx_hashes_flat.extend(tx_hashes)
-
-        def batch_get_tx_keys(tx_hashes_list):
-            results = {}
-            for tx_hash in sorted(tx_hashes_list):
-                results[tx_hash] = self.read_tx_keys(tx_hash)
-            return results
-
-        all_tx_keys = await run_in_thread(batch_get_tx_keys, all_tx_hashes_flat)
-
-        # Assemble results in order while respecting the size limit
+        # Process blocks in batches until we hit size limit or reach chain tip
         blocks = []
         current_size = 0
-        next_height = start_height
+        current_height = start_height
+        batch_size = 100  # Process 100 blocks at a time for efficiency
+        
+        while current_height <= self.db_height:
+            # Calculate how many blocks to fetch in this batch
+            remaining_blocks = self.db_height - current_height + 1
+            batch_count = min(batch_size, remaining_blocks)
+            heights = list(range(current_height, current_height + batch_count))
 
-        for height in heights:
-            tx_hashes = all_tx_hashes.get(height) or []
-            block_keys = []
-            for tx_hash in tx_hashes:
-                keys = all_tx_keys.get(tx_hash)
-                if keys is not None:
-                    block_keys.append((hash_to_hex_str(tx_hash), keys))
+            # Batch 1: fetch tx hashes for all heights in this batch
+            def batch_get_tx_hashes(heights_list):
+                results = {}
+                for height in heights_list:
+                    try:
+                        results[height] = self.fs_tx_hashes_at_blockheight(height)
+                    except Exception:
+                        results[height] = None
+                return results
 
-            block_size = len(json.dumps(block_keys, separators=(',', ':')))
+            all_tx_hashes = await run_in_thread(batch_get_tx_hashes, heights)
 
-            # If adding this block exceeds max_size and we already have blocks, stop here
-            if current_size + block_size > max_size and blocks:
+            # Collect all tx hashes to look up keys in a single batch
+            all_tx_hashes_flat = []
+            for height in heights:
+                tx_hashes = all_tx_hashes.get(height)
+                if tx_hashes:
+                    all_tx_hashes_flat.extend(tx_hashes)
+
+            def batch_get_tx_keys(tx_hashes_list):
+                results = {}
+                for tx_hash in sorted(tx_hashes_list):
+                    results[tx_hash] = self.read_tx_keys(tx_hash)
+                return results
+
+            all_tx_keys = await run_in_thread(batch_get_tx_keys, all_tx_hashes_flat)
+
+            # Assemble results for this batch and check size limits
+            batch_blocks = []
+            batch_size_used = 0
+
+            for height in heights:
+                tx_hashes = all_tx_hashes.get(height) or []
+                block_keys = []
+                for tx_hash in tx_hashes:
+                    keys = all_tx_keys.get(tx_hash)
+                    if keys is not None:
+                        block_keys.append((hash_to_hex_str(tx_hash), keys))
+
+                # Estimate block size more accurately
+                # Account for JSON array overhead: each block is in an array with commas
+                block_size = len(json.dumps(block_keys, separators=(',', ':')))
+                # Add overhead for array structure (commas, brackets) - roughly 2 bytes per block
+                block_size += 2
+
+                # If adding this block would exceed max_size, stop here
+                # Leave some margin to account for JSON wrapper overhead
+                if current_size + block_size > max_size and blocks:
+                    # Return what we have so far
+                    return blocks, height
+
+                batch_blocks.append(block_keys)
+                batch_size_used += block_size
+
+            # Add this batch to results
+            blocks.extend(batch_blocks)
+            current_size += batch_size_used
+            current_height += batch_count
+
+            # If we've processed all blocks, we're done
+            if current_height > self.db_height:
                 break
 
-            blocks.append(block_keys)
-            current_size += block_size
-            next_height = height + 1
-
-            if current_size >= max_size:
-                break
-
-        return blocks, next_height
+        # Return all blocks we fetched
+        return blocks, current_height
 
     def clear_excess_undo_info(self):
         '''Clear excess undo info.  Only most recent N are kept.'''

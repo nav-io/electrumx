@@ -1084,6 +1084,9 @@ class ElectrumX(SessionBase):
         self.set_request_handlers(self.PROTOCOL_MIN)
         self.is_peer = False
         self.cost = 5.0   # Connection cost
+        # Track consecutive sync requests to avoid throttling honest syncing
+        self._last_sync_next_height = None  # Last next_height returned from block_txs_keys_range
+        self._last_sync_time = None  # Time of last sync request
 
     @classmethod
     def protocol_min_max_strings(cls):
@@ -1944,13 +1947,24 @@ class ElectrumX(SessionBase):
     async def block_txs_keys_range(self, start_height):
         '''Returns a list of tx keys for a given range of block heights.'''
         import json
+        import time
         
         start_height = non_negative_integer(start_height)
         
-        # Use a headroom below max_send to keep responses under protocol limits
-        max_size = max(100_000, self.env.max_send - 50_000)
+        # Detect consecutive sync requests (honest syncing)
+        # A consecutive request starts from the previous next_height and happens within 60 seconds
+        is_consecutive_sync = (
+            self._last_sync_next_height is not None and
+            start_height == self._last_sync_next_height and
+            (self._last_sync_time is None or time.time() - self._last_sync_time < 60)
+        )
         
-        blocks, next_height = await self.db.get_range_txs_keys(start_height, 10*1024*1024, max_size)
+        # Reserve significant headroom for JSON wrapper and overhead
+        # The wrapper adds: {"blocks":[...],"next_height":N} which can be substantial
+        # Use 80% of max_send as a conservative limit for the blocks data
+        max_size = int(self.env.max_send * 0.8)
+        
+        blocks, next_height = await self.db.get_range_txs_keys(start_height, max_size)
         
         # Measure JSON serialization time and size
         result = {
@@ -1964,13 +1978,48 @@ class ElectrumX(SessionBase):
             return encoded, len(encoded.encode('utf-8'))
 
         json_str, json_size = encode_result(result)
+        # Trim blocks until we're under the limit
         while json_size > self.env.max_send and result["blocks"]:
             result["blocks"].pop()
-            result["next_height"] -= 1
+            # next_height is where to continue, so if we remove a block, we need to recalculate
+            # it based on how many blocks we're returning
+            result["next_height"] = start_height + len(result["blocks"])
             json_str, json_size = encode_result(result)
 
         if json_size > self.env.max_send:
-            raise RPCError(BAD_REQUEST, 'response too large for max_send; try a smaller range')
+            raise RPCError(BAD_REQUEST, f'response too large for max_send ({self.env.max_send:,d} bytes); '
+                             f'got {json_size:,d} bytes. This should not happen - please report this bug.')
+        
+        # For consecutive sync requests, reduce bandwidth cost significantly to avoid throttling
+        # Bandwidth cost is applied automatically by aiorpcx based on response size
+        # We temporarily increase bw_unit_cost (which reduces bw_cost_per_byte) for consecutive requests
+        original_bw_cost_per_byte = None
+        if is_consecutive_sync:
+            # For consecutive sync, reduce bandwidth cost by 100x (increase unit cost)
+            # This means bandwidth cost will be 1/100th of normal
+            original_bw_cost_per_byte = self.bw_cost_per_byte
+            # Increase bw_unit_cost by 100x, which reduces bw_cost_per_byte by 100x
+            self.bw_cost_per_byte = original_bw_cost_per_byte / 100.0
+            # Minimal base cost for consecutive sync
+            self.bump_cost(0.1)
+        else:
+            # Normal cost for non-consecutive requests (could be random access or resuming)
+            # Cost based on number of blocks returned
+            self.bump_cost(len(result["blocks"]) * 0.01)
+        
+        # Update tracking for next request
+        self._last_sync_next_height = result["next_height"]
+        self._last_sync_time = time.time()
+        
+        # Restore original bandwidth cost after response is sent
+        # aiorpcx applies bandwidth cost when sending the response, so we restore after
+        if original_bw_cost_per_byte is not None:
+            # Schedule restoration after response is sent
+            async def restore_bw_cost():
+                await asyncio.sleep(0.1)  # Small delay to let response be sent
+                self.bw_cost_per_byte = original_bw_cost_per_byte
+            # Fire and forget - don't await
+            asyncio.create_task(restore_bw_cost())
 
         # Log performance metrics
         # self.bump_cost(len(blocks) * 0.00001)

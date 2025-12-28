@@ -661,7 +661,7 @@ class BlockProcessor:
             for idx, txout in enumerate(tx.outputs):
                 # Spend the TX outputs.  Be careful with unspendable
                 # outputs - we didn't save those in the first place.
-                if is_unspendable(txout.pk_script):
+                if all(b == 0 for b in txout.blsct_data.ek) and all(b == 0 for b in txout.blsct_data.bk):
                     continue
 
                 # Get the hashX
@@ -951,8 +951,10 @@ class LTORBlockProcessor(BlockProcessor):
 
             for idx, txout in enumerate(tx.outputs):
                 # Ignore unspendable outputs
-                if is_unspendable(txout.pk_script):
+                if all(b == 0 for b in txout.blsct_data.ek) and all(b == 0 for b in txout.blsct_data.bk):
                     continue
+                # if is_unspendable(txout.pk_script):
+                #     continue
 
                 # Get the hashX
                 hashX = script_hashX(txout.pk_script)
@@ -1035,7 +1037,8 @@ class LTORBlockProcessor(BlockProcessor):
             for idx, txout in enumerate(tx.outputs):
                 # Spend the TX outputs.  Be careful with unspendable
                 # outputs - we didn't save those in the first place.
-                if is_unspendable(txout.pk_script):
+                # if is_unspendable(txout.pk_script):
+                if all(b == 0 for b in txout.blsct_data.ek) and all(b == 0 for b in txout.blsct_data.bk):
                     continue
 
                 # Get the hashX
