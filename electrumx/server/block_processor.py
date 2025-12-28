@@ -665,10 +665,20 @@ class BlockProcessor:
                     continue
 
                 # Get the hashX
-                cache_value = spend_utxo(tx_hash, idx)
-                hashX = cache_value[:HASHX_LEN]
-                add_touched_hashx(hashX)
-                add_touched_outpoint((tx_hash, idx))
+                try:
+                    cache_value = spend_utxo(tx_hash, idx)
+                    hashX = cache_value[:HASHX_LEN]
+                    add_touched_hashx(hashX)
+                    add_touched_outpoint((tx_hash, idx))
+                except ChainError as e:
+                    # If the output was created and spent in the same block, or if it was
+                    # never flushed to the DB, it might not exist. This is OK during reorg
+                    # backup - we just skip it. The output was already removed when it was spent.
+                    if 'not found in "h" table' in str(e):
+                        self.logger.debug(f'Output {hash_to_hex_str(tx_hash)}/{idx} not found during backup - '
+                                        f'likely created and spent in same block or never flushed')
+                        continue
+                    raise
 
             # Restore the inputs
             for txin in reversed(tx.inputs):
@@ -1043,10 +1053,20 @@ class LTORBlockProcessor(BlockProcessor):
 
                 # Get the hashX
                 output_hash = txout.get_hash()
-                cache_value = spend_utxo(output_hash, 0)
-                hashX = cache_value[:HASHX_LEN]
-                add_touched_hashx(hashX)
-                add_touched_outpoint(output_hash)
+                try:
+                    cache_value = spend_utxo(output_hash, 0)
+                    hashX = cache_value[:HASHX_LEN]
+                    add_touched_hashx(hashX)
+                    add_touched_outpoint(output_hash)
+                except ChainError as e:
+                    # If the output was created and spent in the same block, or if it was
+                    # never flushed to the DB, it might not exist. This is OK during reorg
+                    # backup - we just skip it. The output was already removed when it was spent.
+                    if 'not found in "h" table' in str(e):
+                        self.logger.debug(f'Output {hash_to_hex_str(output_hash)} not found during backup - '
+                                        f'likely created and spent in same block or never flushed')
+                        continue
+                    raise
 
         self.undo_tx_hashes.append(b''.join(tx_hash for tx, tx_hash in txs))
         self.tx_count -= len(txs)
