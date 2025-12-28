@@ -1025,25 +1025,26 @@ class LTORBlockProcessor(BlockProcessor):
 
         # Restore coins that had been spent
         # (may include coins made then spent in this block)
-        n = 0
-        for tx, tx_hash in txs:
-            for txin in tx.inputs:
+        # undo_info is in reverse block order, so we need to process transactions in reverse
+        n = len(undo_info)
+        for tx, tx_hash in reversed(txs):
+            for txin in reversed(tx.inputs):
                 if txin.is_generation():
                     continue
                 # Also treat all-zero prev_hash as coinbase (some coins may use prev_idx=0 instead of -1)
                 if txin.prev_hash == ZERO:
                     continue
+                n -= undo_entry_len
                 undo_item = undo_info[n:n + undo_entry_len]
                 prevout = txin.prev_hash
                 put_utxo(prevout, undo_item)
                 add_touched_hashx(undo_item[:HASHX_LEN])
                 add_touched_outpoint(txin.prev_hash)
-                n += undo_entry_len
 
-        assert n == len(undo_info)
+        assert n == 0
 
         # Remove tx outputs made in this block, by spending them.
-        for tx, tx_hash in txs:
+        for tx, tx_hash in reversed(txs):
             for idx, txout in enumerate(tx.outputs):
                 # Spend the TX outputs.  Be careful with unspendable
                 # outputs - we didn't save those in the first place.

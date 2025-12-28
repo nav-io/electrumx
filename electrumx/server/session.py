@@ -2002,6 +2002,20 @@ class ElectrumX(SessionBase):
             self.bw_cost_per_byte = original_bw_cost_per_byte / 100.0
             # Minimal base cost for consecutive sync
             self.bump_cost(0.1)
+            
+            # For remote connections, also reduce group retained_cost to prevent throttling
+            # Localhost connections are not grouped, so this only affects remote connections
+            # Access session groups through session_mgr to reduce retained_cost for consecutive syncs
+            groups = self.session_mgr.sessions.get(self)
+            if groups:
+                # Reduce retained_cost for all groups this session belongs to
+                # This helps remote connections that share group cost limits
+                for group in groups:
+                    # Reduce retained_cost by a portion (decay it faster for consecutive syncs)
+                    # This allows honest syncing to proceed even if previous sessions left high cost
+                    # Reduce up to 100 cost units per consecutive sync request
+                    reduction = min(group.retained_cost, 100.0)
+                    group.retained_cost = max(0.0, group.retained_cost - reduction)
         else:
             # Normal cost for non-consecutive requests (could be random access or resuming)
             # Cost based on number of blocks returned
