@@ -533,7 +533,7 @@ class BlockProcessor:
                     continue
                 
                 try:
-                    cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
+                    cache_value = spend_utxo(txin.prev_hash, 0)
                 except ChainError as e:
                     # Add context about which transaction is trying to spend this output
                     self.logger.error(f'Failed to spend UTXO {hash_to_hex_str(txin.prev_hash)} in transaction {hash_to_hex_str(tx_hash)} at height {self.height}')
@@ -664,18 +664,20 @@ class BlockProcessor:
                 if all(b == 0 for b in txout.blsct_data.ek) and all(b == 0 for b in txout.blsct_data.bk):
                     continue
 
+                output_hash = txout.get_hash()
+
                 # Get the hashX
                 try:
-                    cache_value = spend_utxo(tx_hash, idx)
+                    cache_value = spend_utxo(output_hash, 0)
                     hashX = cache_value[:HASHX_LEN]
                     add_touched_hashx(hashX)
-                    add_touched_outpoint((tx_hash, idx))
+                    add_touched_outpoint(output_hash)
                 except ChainError as e:
                     # If the output was created and spent in the same block, or if it was
                     # never flushed to the DB, it might not exist. This is OK during reorg
                     # backup - we just skip it. The output was already removed when it was spent.
                     if 'not found in "h" table' in str(e):
-                        self.logger.debug(f'Output {hash_to_hex_str(tx_hash)}/{idx} not found during backup - '
+                        self.logger.debug(f'Output {hash_to_hex_str(output_hash)} not found during backup - '
                                         f'likely created and spent in same block or never flushed')
                         continue
                     raise
@@ -689,11 +691,12 @@ class BlockProcessor:
                     continue
                 n -= undo_entry_len
                 undo_item = undo_info[n:n + undo_entry_len]
-                prevout = txin.prev_hash + pack_le_uint32(txin.prev_idx)[:TXOUTIDX_LEN]
+                # For Navio: txin.prev_hash is the output hash, use it directly as the key
+                prevout = txin.prev_hash
                 put_utxo(prevout, undo_item)
                 hashX = undo_item[:HASHX_LEN]
                 add_touched_hashx(hashX)
-                add_touched_outpoint((txin.prev_hash, txin.prev_idx))
+                add_touched_outpoint(txin.prev_hash)
                 undo_hist_spend(prevout)
 
         self.undo_tx_hashes.append(b''.join(tx_hash for tx, tx_hash in txs))
