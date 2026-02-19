@@ -1070,7 +1070,14 @@ class DB:
             for each prevout.
             '''
             lookup_hashX = self._get_hashX_for_utxo
-            return [lookup_hashX(*prevout) for prevout in prevouts]
+            result = []
+            for prevout in prevouts:
+                if isinstance(prevout, (tuple, list)) and len(prevout) == 2:
+                    result.append(lookup_hashX(prevout[0], prevout[1]))
+                else:
+                    # Single output_hash (e.g. Navio-style hash-only outpoints)
+                    result.append(lookup_hashX(prevout, 0))
+            return result
 
         def lookup_utxos(hashX_pairs):
             def lookup_utxo(hashX, suffix):
