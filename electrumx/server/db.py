@@ -814,28 +814,35 @@ class DB:
         self.logger.info(f'[BENCH] get_block_txs_keys(height={height}): total={total_time*1000:.2f}ms, num_txs=0')
         return []
 
-    async def get_range_txs_keys(self, start_height, max_size=10*1024*1024):
+    async def get_range_txs_keys(self, start_height, max_size=10*1024*1024, max_blocks=None):
         '''Returns as many tx keys as possible starting from the given block height.
         Returns (blocks, next_height).
         blocks is a list of blocks, where each block is a list of (tx_hash, keys).
-        Fetches blocks until response size would exceed max_size or we reach the chain tip.
-        next_height is where the client should resume fetching.
+        Stops when response size would exceed max_size, when max_blocks blocks are
+        collected (if set), or when the chain tip is reached.
+        next_height is where the client should resume fetching (tip + 1 when done).
         '''
         import json
 
         if start_height > self.db_height:
             return [], start_height
 
-        # Process blocks in batches until we hit size limit or reach chain tip
+        # Process blocks in batches until we hit size/count limit or reach chain tip
         blocks = []
         current_size = 0
         current_height = start_height
         batch_size = 100  # Process 100 blocks at a time for efficiency
-        
+
         while current_height <= self.db_height:
+            # Enforce max_blocks before fetching more
+            if max_blocks is not None and len(blocks) >= max_blocks:
+                return blocks[:max_blocks], start_height + max_blocks
+
             # Calculate how many blocks to fetch in this batch
             remaining_blocks = self.db_height - current_height + 1
             batch_count = min(batch_size, remaining_blocks)
+            if max_blocks is not None:
+                batch_count = min(batch_count, max_blocks - len(blocks))
             heights = list(range(current_height, current_height + batch_count))
 
             # Batch 1: fetch tx hashes for all heights in this batch
@@ -897,11 +904,15 @@ class DB:
             current_size += batch_size_used
             current_height += batch_count
 
+            # Enforce max_blocks after adding batch (in case we exceeded in this batch)
+            if max_blocks is not None and len(blocks) >= max_blocks:
+                return blocks[:max_blocks], start_height + max_blocks
+
             # If we've processed all blocks, we're done
             if current_height > self.db_height:
                 break
 
-        # Return all blocks we fetched
+        # Return all blocks we fetched; next_height is tip + 1 when we've returned up to tip
         return blocks, current_height
 
     def clear_excess_undo_info(self):

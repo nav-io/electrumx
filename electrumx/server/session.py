@@ -1944,13 +1944,30 @@ class ElectrumX(SessionBase):
         
         return serialized_output.hex()
 
-    async def block_txs_keys_range(self, start_height):
-        '''Returns a list of tx keys for a given range of block heights.'''
+    # Pagination limits for blockchain.block.get_range_txs_keys
+    RANGE_TXS_KEYS_DEFAULT_COUNT = 2000
+    RANGE_TXS_KEYS_MAX_COUNT = 20000
+
+    async def block_txs_keys_range(self, start_height, count=None):
+        '''Returns a list of tx keys for a given range of block heights.
+        start_height: first block height to return.
+        count: optional max number of blocks to return (default 1000, server cap 2000).
+        Response includes next_height so the client can paginate.
+        '''
         import json
         import time
-        
+
         start_height = non_negative_integer(start_height)
-        
+
+        # Pagination: default count, apply server-side cap
+        if count is None:
+            max_blocks = self.RANGE_TXS_KEYS_DEFAULT_COUNT
+        else:
+            max_blocks = min(
+                non_negative_integer(count),
+                self.RANGE_TXS_KEYS_MAX_COUNT
+            )
+
         # Detect consecutive sync requests (honest syncing)
         # A consecutive request starts from the previous next_height and happens within 60 seconds
         is_consecutive_sync = (
@@ -1958,13 +1975,15 @@ class ElectrumX(SessionBase):
             start_height == self._last_sync_next_height and
             (self._last_sync_time is None or time.time() - self._last_sync_time < 60)
         )
-        
+
         # Reserve significant headroom for JSON wrapper and overhead
         # The wrapper adds: {"blocks":[...],"next_height":N} which can be substantial
         # Use 80% of max_send as a conservative limit for the blocks data
         max_size = int(self.env.max_send * 0.8)
-        
-        blocks, next_height = await self.db.get_range_txs_keys(start_height, max_size)
+
+        blocks, next_height = await self.db.get_range_txs_keys(
+            start_height, max_size, max_blocks=max_blocks
+        )
         
         # Measure JSON serialization time and size
         result = {
