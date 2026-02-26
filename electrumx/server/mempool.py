@@ -520,7 +520,7 @@ class MemPool:
         result = []
         for tx_hash in self.hashXs.get(hashX, ()):
             tx = self.txs[tx_hash]
-            has_ui = any(hash in self.txs for hash, idx in tx.prevouts)
+            has_ui = any(hash in self.txs for hash in tx.prevouts)
             result.append(MemPoolTxSummary(tx_hash, tx.fee, has_ui))
         result.sort(key=lambda x: (x.has_unconfirmed_inputs, x.hash))
         return result
