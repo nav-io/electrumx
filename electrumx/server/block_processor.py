@@ -518,7 +518,7 @@ class BlockProcessor:
                              script_hashX(b'') + tx_numb + to_le_uint64(txout.value))
                 # General logging for UTXO additions (DEBUG level)
                 add_touched_outpoint(output_hash)
-                tx_keys["vout"].append({'spendingKey': txout.blsct_data.sk.hex(), 'blindingKey': txout.blsct_data.bk.hex(), 'viewTag': txout.blsct_data.view_tag, 'script': txout.pk_script.hex(), 'outputHash': output_hash.hex()})
+                tx_keys["vout"].append({'spendingKey': txout.blsct_data.sk.hex(), 'blindingKey': txout.blsct_data.bk.hex(), 'viewTag': txout.blsct_data.view_tag, 'script': txout.pk_script.hex(), 'outputHash': hash_to_hex_str(output_hash)})
 
             append_hashXs(hashXs)
             put_txhash_to_txnum_map(tx_hash, tx_num)
@@ -543,7 +543,7 @@ class BlockProcessor:
                 put_txo_to_spender_map(txin.prev_hash, tx_hash)
                 add_touched_outpoint(txin.prev_hash)
 
-                tx_keys["vin"].append({'prevoutHash': txin.prev_hash.hex()})
+                tx_keys["vin"].append({'prevoutHash': hash_to_hex_str(txin.prev_hash)})
                 append_hashX(cache_value[:HASHX_LEN])
                 continue
                 

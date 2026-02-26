@@ -1938,7 +1938,7 @@ class ElectrumX(SessionBase):
         del output_hash
 
         # Get the serialized output directly (fast path, no deserialization needed)
-        serialized_output = self.db.read_serialized_output(output_hash_bytes[::-1])
+        serialized_output = self.db.read_serialized_output(output_hash_bytes)
         if serialized_output is None:
             raise RPCError(BAD_REQUEST, f'output {hash_to_hex_str(output_hash_bytes)} not found in database')
         
