@@ -568,7 +568,7 @@ class BlockProcessor:
                             if prevOut.tokenid == bytes(32):
                                 append_hashX(cache_value[:HASHX_LEN])
 
-                            obj = {'outhash': prev_tx_hash[::-1].hex()}
+                            obj = {'outhash': prev_tx_hash[].hex()}
 
                             obj['outputKey'] = prevOut.blsct_data.ek.hex()
                             obj['spendingKey'] = prevOut.blsct_data.sk.hex()
