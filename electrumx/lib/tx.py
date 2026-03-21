@@ -444,6 +444,7 @@ class DeserializerTxNavio(Deserializer):
         script = b''
         flags = 0
         if value == 0x7FFFFFFFFFFFFFFF:
+            value = 0
             flags = self._read_le_int64()
             if flags & 0x1 << 3:
                 value = self._read_le_int64()
