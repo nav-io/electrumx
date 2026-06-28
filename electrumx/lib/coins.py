@@ -344,4 +344,4 @@ class NavioTestnet(Navio):
     NET = 'testnet'
     RPC_PORT = 33677
     DESERIALIZER = lib_tx.DeserializerTxNavio
-    GENESIS_HASH = ('4fc2a50072391d595ebd035debbf0060a9cb537106a2da7dd758505a51410445')
+    GENESIS_HASH = ('7a04d0211de9194390c69ea0ab0d67e3c18a00c5a0b4aae65a4b5cd919e5c3e6')
