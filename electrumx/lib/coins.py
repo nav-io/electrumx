@@ -286,8 +286,8 @@ class Navio(Coin):
     P2PKH_VERBYTE = bytes.fromhex("35")
     P2SH_VERBYTES = (bytes.fromhex("55"),)
     WIF_BYTE = bytes.fromhex("96")
-    GENESIS_HASH = ('00006a4e3e18c71c6d48ad6c261e2254'
-                    'fa764cf29607a4357c99b712dfbb8e6a')
+    GENESIS_HASH = ('0af3c23ae1ac4910693b7187ac61641d'
+                    '16d1cf49cba7acf8649d48e831d86b13')
     DESERIALIZER = lib_tx.DeserializerTxNavio
     TX_COUNT = 137641
     TX_COUNT_HEIGHT = 3649662
