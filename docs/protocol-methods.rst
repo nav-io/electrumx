@@ -1434,3 +1434,180 @@ Returns detailed information about a deterministic masternode.
     },
     "confirmations": 984
   }
+
+Navio RFQ / atomic-swap bridge
+==============================
+
+These methods let light wallets participate in Navio's RFQ atomic-swap
+trading (both as takers and as makers) through the daemon's encrypted
+p2p messaging bus. Transaction halves are always built and signed
+client-side; the daemon only wraps, authenticates, encrypts and relays
+them. Token arguments are 32-byte hex token hashes, or the empty string
+for NAV. Amounts are integer base units.
+
+blockchain.p2pmsg.info
+----------------------
+
+Return the state of the daemon's p2p messaging subsystem.
+
+**Signature**
+
+  .. function:: blockchain.p2pmsg.info()
+
+**Result**
+
+  A dictionary with ``enabled`` and, when enabled, ``inbox_pubkey``.
+
+blockchain.rfq.request_quote
+----------------------------
+
+Taker: open a request-for-quote. The daemon broadcasts it over the bus
+and starts collecting maker quotes.
+
+**Signature**
+
+  .. function:: blockchain.rfq.request_quote(buy_token, sell_token, size, expiry)
+
+**Result**
+
+  A dictionary with ``uuid`` (the request id) and ``reply_key``.
+
+blockchain.rfq.list_quotes
+--------------------------
+
+Taker: list quotes collected so far for an open request, ranked
+cheapest first.
+
+**Signature**
+
+  .. function:: blockchain.rfq.list_quotes(uuid, min_fill_ratio=1.0)
+
+**Result**
+
+  A list of dictionaries with ``quote_id``, ``fill``, ``sell_cost``,
+  ``price`` and ``order_expiry``.
+
+blockchain.rfq.accept_quote
+---------------------------
+
+Taker: accept a collected quote. The client builds and signs its own
+unbalanced half-transaction paying ``sell_cost`` and receiving
+``fill``; the daemon combines it with the maker's half and broadcasts
+the atomic swap.
+
+**Signature**
+
+  .. function:: blockchain.rfq.accept_quote(uuid, quote_id, taker_half_hex)
+
+**Result**
+
+  The transaction id of the broadcast swap.
+
+blockchain.rfq.cancel
+---------------------
+
+Taker: cancel an open request, discarding its collected quotes.
+
+**Signature**
+
+  .. function:: blockchain.rfq.cancel(uuid)
+
+blockchain.swap.set_intent
+--------------------------
+
+Maker: configure a swap intent on the daemon so inbound RFQ requests
+are matched and queued for this client to answer. ``price_min`` is the
+minimum price in sell-units per buy-unit scaled by 1e8.
+
+**Signature**
+
+  .. function:: blockchain.swap.set_intent(token_in, token_out, min_size, max_size, price_min, expiry)
+
+**Result**
+
+  The numeric intent id.
+
+blockchain.swap.clear_intent
+----------------------------
+
+Maker: remove a swap intent by id.
+
+**Signature**
+
+  .. function:: blockchain.swap.clear_intent(intent_id)
+
+blockchain.swap.list_intents
+----------------------------
+
+Maker: list the daemon's swap intents.
+
+**Signature**
+
+  .. function:: blockchain.swap.list_intents()
+
+blockchain.swap.pending_requests
+--------------------------------
+
+Maker: list inbound RFQ requests that matched a local intent and await
+a reply.
+
+**Signature**
+
+  .. function:: blockchain.swap.pending_requests()
+
+**Result**
+
+  A list of dictionaries with ``uuid``, ``buy_token``, ``sell_token``,
+  ``fill``, ``sell_cost`` and ``reply_key``.
+
+blockchain.swap.send_quote
+--------------------------
+
+Maker: answer a pending request. The client builds and signs the
+unbalanced maker half delivering ``fill`` of ``buy_token`` and
+receiving ``sell_cost`` of ``sell_token``; the daemon wraps it in a
+quote, authenticates it, encrypts it to the taker's ``reply_key`` and
+broadcasts it.
+
+**Signature**
+
+  .. function:: blockchain.swap.send_quote(uuid, reply_key, half_tx_hex, buy_token, sell_token, fill, sell_cost, order_expiry)
+
+**Result**
+
+  The quote id.
+
+blockchain.swap.broadcast_order
+-------------------------------
+
+Maker: publish a standing swap order (a pre-signed half) that peers
+cache and can use to answer matching RFQs while the maker is offline.
+
+**Signature**
+
+  .. function:: blockchain.swap.broadcast_order(half_tx_hex, offer_token, offer_amount, want_token, want_amount, expiry)
+
+**Result**
+
+  The quote id of the standing order.
+
+blockchain.swap.pending.subscribe
+---------------------------------
+
+Maker: subscribe to pending matched RFQ requests. Returns the current
+pending list. A notification with the full updated list is pushed
+whenever the daemon's pending set changes.
+
+**Signature**
+
+  .. function:: blockchain.swap.pending.subscribe()
+
+blockchain.swap.pending.unsubscribe
+-----------------------------------
+
+Maker: stop pending request notifications. Returns whether a
+subscription existed.
+
+**Signature**
+
+  .. function:: blockchain.swap.pending.unsubscribe()

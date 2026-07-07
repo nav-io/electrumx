@@ -308,6 +308,61 @@ class Daemon:
         '''Returns info from a token.'''
         return await self._send_single('getnft', (id, subid, get_utxo, ))
 
+    async def getp2pmsginfo(self):
+        '''Return state of the daemon's encrypted p2p messaging subsystem.'''
+        return await self._send_single('getp2pmsginfo')
+
+    async def requestquote(self, buy_token, sell_token, size, expiry):
+        '''Open an RFQ: broadcast a request-for-quote over the p2pmsg bus.'''
+        return await self._send_single(
+            'requestquote', (buy_token, sell_token, size, expiry, ))
+
+    async def listquotes(self, uuid, min_fill_ratio=1.0):
+        '''List quotes collected for an open RFQ, best price first.'''
+        return await self._send_single('listquotes', (uuid, min_fill_ratio, ))
+
+    async def acceptquote(self, uuid, quote_id, taker_half_hex):
+        '''Combine the taker half with a collected quote and broadcast.'''
+        return await self._send_single(
+            'acceptquote', (uuid, quote_id, taker_half_hex, ))
+
+    async def cancelrfq(self, uuid):
+        '''Cancel an open RFQ, discarding its collected quotes.'''
+        return await self._send_single('cancelrfq', (uuid, ))
+
+    async def setswapintent(self, token_in, token_out, min_size, max_size,
+                            price_min, expiry):
+        '''Configure a local maker swap intent on the daemon.'''
+        return await self._send_single(
+            'setswapintent',
+            (token_in, token_out, min_size, max_size, price_min, expiry, ))
+
+    async def clearswapintent(self, intent_id):
+        '''Remove a local maker swap intent by id.'''
+        return await self._send_single('clearswapintent', (intent_id, ))
+
+    async def listswapintents(self):
+        '''List all local maker swap intents.'''
+        return await self._send_single('listswapintents')
+
+    async def listpendingquoterequests(self):
+        '''List inbound RFQ requests matching a local intent, awaiting reply.'''
+        return await self._send_single('listpendingquoterequests')
+
+    async def sendquote(self, uuid, reply_key, half_tx_hex, buy_token,
+                        sell_token, fill, sell_cost, order_expiry):
+        '''Send an externally built maker quote for an RFQ over the bus.'''
+        return await self._send_single(
+            'sendquote', (uuid, reply_key, half_tx_hex, buy_token,
+                          sell_token, fill, sell_cost, order_expiry, ))
+
+    async def sendorder(self, half_tx_hex, offer_token, offer_amount,
+                        want_token, want_amount, expiry):
+        '''Publish an externally built standing swap order over the bus.'''
+        return await self._send_single(
+            'sendorder', (half_tx_hex, offer_token, offer_amount,
+                          want_token, want_amount, expiry, ))
+
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
 
