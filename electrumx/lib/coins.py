@@ -345,3 +345,18 @@ class NavioTestnet(Navio):
     RPC_PORT = 33677
     DESERIALIZER = lib_tx.DeserializerTxNavio
     GENESIS_HASH = ('7a04d0211de9194390c69ea0ab0d67e3c18a00c5a0b4aae65a4b5cd919e5c3e6')
+
+
+class NavioRegtest(Navio):
+    # Navio blsctregtest, for local development (a daemon started with
+    # -chain=blsctregtest).
+    SHORTNAME = "RNAV"
+    P2PKH_VERBYTE = bytes.fromhex("6F")
+    P2SH_VERBYTES = [bytes.fromhex("C4")]
+    TX_COUNT = 0
+    TX_COUNT_HEIGHT = 1
+    NET = 'regtest'
+    RPC_PORT = 18332
+    PEERS = []
+    DESERIALIZER = lib_tx.DeserializerTxNavio
+    GENESIS_HASH = ('1f50a5ca098d358d4f328e6d74277843be011511b7f28b6e2a463c10d6a5d6d0')
