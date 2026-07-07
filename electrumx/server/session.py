@@ -880,12 +880,34 @@ class SessionManager:
        
 
         for session in self.sessions:
-            coro = session.notify(
+            coro = self._notify_session(
+                session,
                 touched_hashxs=touched_hashxs,
                 touched_outpoints=touched_outpoints,
                 height_changed=height_changed,
             )
             await self._task_group.spawn(coro)
+
+    async def _notify_session(
+            self,
+            session,
+            *,
+            touched_hashxs: Set[bytes],
+            touched_outpoints: Set[bytes],
+            height_changed: bool,
+    ):
+        # A client disconnecting mid-notification (e.g. a websocket that
+        # closed before we write to it) raises out of send_notification;
+        # if that propagates into the shared task group it tears down the
+        # whole server.  Contain it to this session.
+        try:
+            await session.notify(
+                touched_hashxs=touched_hashxs,
+                touched_outpoints=touched_outpoints,
+                height_changed=height_changed,
+            )
+        except Exception as e:
+            session.logger.info(f'failed to notify session: {e!r}')
 
     def _ip_addr_group_name(self, session) -> Optional[str]:
         host = session.remote_address().host
