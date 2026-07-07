@@ -208,6 +208,10 @@ class SessionManager:
         self.sessions = {}          # type: Dict[ElectrumX, Iterable[SessionGroup]]
         self.session_groups = {}    # type: Dict[str, SessionGroup]
         self.txs_sent = 0
+        # RFQ/swap bridge: pending-quote-request subscription polling. The
+        # poller stays idle until the first session subscribes.
+        self.swap_pending_poll_wanted = False
+        self._swap_pending_last = None
         # Would use monotonic time, but aiorpcx sessions use Unix time:
         self.start_time = time.time()
         self._method_counts = defaultdict(int)
@@ -318,6 +322,38 @@ class SessionManager:
                 for line in sessions_lines(data):
                     self.logger.info(line)
                 self.logger.info(util.json_serialize(self._get_info()))
+
+    async def _poll_swap_pending(self):
+        '''Poll the daemon for pending matched RFQ requests and push changes
+        to sessions subscribed via blockchain.swap.pending.subscribe.
+
+        Idle until the first subscription arrives. On daemon errors (e.g.
+        p2pmsg disabled) it backs off and keeps trying, so a daemon restart
+        with the feature enabled recovers without an electrumx restart.
+        '''
+        poll_interval = 5
+        error_backoff = 60
+        while True:
+            await sleep(poll_interval)
+            if not self.swap_pending_poll_wanted:
+                continue
+            subscribed = [session for session in self.sessions
+                          if getattr(session, 'swap_pending_subscribed', False)]
+            if not subscribed:
+                continue
+            try:
+                pending = await self.daemon.listpendingquoterequests()
+            except DaemonError as e:
+                self.logger.warning(f'swap pending poll: daemon error {e}')
+                await sleep(error_backoff)
+                continue
+            if pending == self._swap_pending_last:
+                continue
+            self._swap_pending_last = pending
+            for session in subscribed:
+                await self._task_group.spawn(
+                    session.send_notification(
+                        'blockchain.swap.pending.subscribe', (pending, )))
 
     async def _disconnect_sessions(self, sessions, reason, *, force_after=1.0):
         if sessions:
@@ -726,6 +762,7 @@ class SessionManager:
                     await group.spawn(self._recalc_concurrency())
                     await group.spawn(self._log_sessions())
                     await group.spawn(self._manage_servers())
+                    await group.spawn(self._poll_swap_pending())
                     self.logger.info('SessionManager: all background tasks spawned, TaskGroup running...')
             except Exception as e:
                 self.logger.error(f'Exception in SessionManager TaskGroup: {e!r}')
@@ -1103,6 +1140,7 @@ class ElectrumX(SessionBase):
         self.txoutpoint_subs = set()  # type: Set[bytes]
         self.mempool_hashX_statuses = {}  # type: Dict[bytes, str]
         self.mempool_txoutpoint_statuses = {}  # type: Dict[bytes, Mapping[str, Any]]
+        self.swap_pending_subscribed = False
         self.set_request_handlers(self.PROTOCOL_MIN)
         self.is_peer = False
         self.cost = 5.0   # Connection cost
@@ -1903,6 +1941,141 @@ class ElectrumX(SessionBase):
 
         return await self.daemon_request('getnft', id, sub_id, get_utxo)
 
+    # -- RFQ / atomic-swap bridge (Navio p2pmsg bus) --------------------------
+    #
+    # Thin proxies over the daemon's p2pmsg RPCs so light wallets can trade as
+    # takers and makers. Halves are built and signed client-side; the daemon
+    # only wraps, encrypts and relays them over the encrypted broadcast bus.
+
+    @staticmethod
+    def _assert_token(value):
+        '''A token id is a 32-byte hex hash, or the empty string for NAV.'''
+        if value == '':
+            return value
+        assert_hash(value)
+        return value
+
+    async def p2pmsg_info(self):
+        '''Return the daemon's p2pmsg subsystem state.'''
+        self.bump_cost(0.25)
+        return await self.daemon_request('getp2pmsginfo')
+
+    async def rfq_request_quote(self, buy_token, sell_token, size, expiry):
+        '''Open an RFQ on the daemon: broadcast a request-for-quote and start
+        collecting maker quotes. Returns {uuid, reply_key}.'''
+        self._assert_token(buy_token)
+        self._assert_token(sell_token)
+        size = non_negative_integer(size)
+        expiry = non_negative_integer(expiry)
+        # The daemon grinds anti-spam PoW for the broadcast; price accordingly.
+        self.bump_cost(5.0)
+        return await self.daemon_request(
+            'requestquote', buy_token, sell_token, size, expiry)
+
+    async def rfq_list_quotes(self, uuid, min_fill_ratio=1.0):
+        '''List quotes collected for an open RFQ, best price first.'''
+        assert_hash(uuid)
+        self.bump_cost(0.5)
+        return await self.daemon_request('listquotes', uuid, min_fill_ratio)
+
+    async def rfq_accept_quote(self, uuid, quote_id, taker_half_hex):
+        '''Combine the client-built taker half with a collected quote and
+        broadcast the atomic swap. Returns the txid.'''
+        assert_hash(uuid)
+        assert_hash(quote_id)
+        self.bump_cost(1.0 + len(taker_half_hex) / 10000)
+        txid = await self.daemon_request(
+            'acceptquote', uuid, quote_id, taker_half_hex)
+        self.txs_sent += 1
+        return txid
+
+    async def rfq_cancel(self, uuid):
+        '''Cancel an open RFQ, discarding its collected quotes.'''
+        assert_hash(uuid)
+        self.bump_cost(0.25)
+        return await self.daemon_request('cancelrfq', uuid)
+
+    async def swap_set_intent(self, token_in, token_out, min_size, max_size,
+                              price_min, expiry):
+        '''Configure a maker swap intent on the daemon so inbound RFQs are
+        matched and queued for this client to answer.'''
+        self._assert_token(token_in)
+        self._assert_token(token_out)
+        min_size = non_negative_integer(min_size)
+        max_size = non_negative_integer(max_size)
+        price_min = non_negative_integer(price_min)
+        expiry = non_negative_integer(expiry)
+        self.bump_cost(0.5)
+        return await self.daemon_request(
+            'setswapintent', token_in, token_out,
+            min_size, max_size, price_min, expiry)
+
+    async def swap_clear_intent(self, intent_id):
+        '''Remove a maker swap intent by id.'''
+        intent_id = non_negative_integer(intent_id)
+        self.bump_cost(0.25)
+        return await self.daemon_request('clearswapintent', intent_id)
+
+    async def swap_list_intents(self):
+        '''List the daemon's maker swap intents.'''
+        self.bump_cost(0.25)
+        return await self.daemon_request('listswapintents')
+
+    async def swap_pending_requests(self):
+        '''List inbound RFQ requests that matched a local intent and await a
+        maker reply (see swap.send_quote).'''
+        self.bump_cost(0.5)
+        return await self.daemon_request('listpendingquoterequests')
+
+    async def swap_send_quote(self, uuid, reply_key, half_tx_hex, buy_token,
+                              sell_token, fill, sell_cost, order_expiry):
+        '''Send a maker quote built and signed client-side. The daemon wraps
+        it, authenticates it under its session identity, encrypts it to the
+        taker's reply key and broadcasts it. Returns the quote_id.'''
+        assert_hash(uuid)
+        self._assert_token(buy_token)
+        self._assert_token(sell_token)
+        fill = non_negative_integer(fill)
+        sell_cost = non_negative_integer(sell_cost)
+        order_expiry = non_negative_integer(order_expiry)
+        # The daemon grinds anti-spam PoW for the broadcast; price accordingly.
+        self.bump_cost(5.0 + len(half_tx_hex) / 10000)
+        return await self.daemon_request(
+            'sendquote', uuid, reply_key, half_tx_hex, buy_token,
+            sell_token, fill, sell_cost, order_expiry)
+
+    async def swap_broadcast_order(self, half_tx_hex, offer_token,
+                                   offer_amount, want_token, want_amount,
+                                   expiry):
+        '''Publish a standing swap order built and signed client-side. Peers
+        cache it and can answer matching RFQs while the maker is offline.
+        Returns the quote_id.'''
+        self._assert_token(offer_token)
+        self._assert_token(want_token)
+        offer_amount = non_negative_integer(offer_amount)
+        want_amount = non_negative_integer(want_amount)
+        expiry = non_negative_integer(expiry)
+        self.bump_cost(5.0 + len(half_tx_hex) / 10000)
+        return await self.daemon_request(
+            'sendorder', half_tx_hex, offer_token, offer_amount,
+            want_token, want_amount, expiry)
+
+    async def swap_pending_subscribe(self):
+        '''Subscribe to pending matched RFQ requests. Returns the current
+        list; pushes blockchain.swap.pending.subscribe notifications whenever
+        the daemon's pending set changes.'''
+        self.bump_cost(0.5)
+        self.swap_pending_subscribed = True
+        self.session_mgr.swap_pending_poll_wanted = True
+        return await self.daemon_request('listpendingquoterequests')
+
+    async def swap_pending_unsubscribe(self):
+        '''Stop pending matched RFQ request notifications.'''
+        self.bump_cost(0.1)
+        was_subscribed = self.swap_pending_subscribed
+        self.swap_pending_subscribed = False
+        return was_subscribed
+
     async def transaction_merkle(self, tx_hash, height=None):
         '''Return the merkle branch to a confirmed transaction given its hash
         and height.
@@ -2110,6 +2283,19 @@ class ElectrumX(SessionBase):
             'blockchain.dotnav.resolve_name': self.resolve_name,
             'blockchain.token.get_token': self.get_token,
             'blockchain.token.get_nft': self.get_nft,
+            'blockchain.p2pmsg.info': self.p2pmsg_info,
+            'blockchain.rfq.request_quote': self.rfq_request_quote,
+            'blockchain.rfq.list_quotes': self.rfq_list_quotes,
+            'blockchain.rfq.accept_quote': self.rfq_accept_quote,
+            'blockchain.rfq.cancel': self.rfq_cancel,
+            'blockchain.swap.set_intent': self.swap_set_intent,
+            'blockchain.swap.clear_intent': self.swap_clear_intent,
+            'blockchain.swap.list_intents': self.swap_list_intents,
+            'blockchain.swap.pending_requests': self.swap_pending_requests,
+            'blockchain.swap.send_quote': self.swap_send_quote,
+            'blockchain.swap.broadcast_order': self.swap_broadcast_order,
+            'blockchain.swap.pending.subscribe': self.swap_pending_subscribe,
+            'blockchain.swap.pending.unsubscribe': self.swap_pending_unsubscribe,
             'mempool.get_fee_histogram': self.compact_fee_histogram,
             'server.add_peer': self.add_peer,
             'server.banner': self.banner,
