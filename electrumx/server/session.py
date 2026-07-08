@@ -1949,11 +1949,20 @@ class ElectrumX(SessionBase):
 
     @staticmethod
     def _assert_token(value):
-        '''A token id is a 32-byte hex hash, or the empty string for NAV.'''
+        '''A token id is a 32-byte hex hash, or the empty string for NAV.
+
+        Not assert_hash(): that helper expects 20-byte (address) hashes and
+        rejects every real token id.
+        '''
         if value == '':
             return value
-        assert_hash(value)
-        return value
+        try:
+            if len(util.hex_to_bytes(value)) == 32:
+                return value
+        except (ValueError, TypeError):
+            pass
+        raise RPCError(BAD_REQUEST,
+                       f'{value} is not a token id (32-byte hex hash)')
 
     async def p2pmsg_info(self):
         '''Return the daemon's p2pmsg subsystem state.'''
