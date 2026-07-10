@@ -1948,21 +1948,24 @@ class ElectrumX(SessionBase):
     # only wraps, encrypts and relays them over the encrypted broadcast bus.
 
     @staticmethod
-    def _assert_token(value):
-        '''A token id is a 32-byte hex hash, or the empty string for NAV.
-
-        Not assert_hash(): that helper expects 20-byte (address) hashes and
-        rejects every real token id.
-        '''
-        if value == '':
-            return value
+    def _assert_hash32(value, what):
+        '''RFQ identifiers (uuids, quote ids, token ids) are 32-byte hex
+        hashes. Not assert_hash(): that helper expects 20-byte (address)
+        hashes and rejects every 32-byte value.'''
         try:
             if len(util.hex_to_bytes(value)) == 32:
                 return value
         except (ValueError, TypeError):
             pass
         raise RPCError(BAD_REQUEST,
-                       f'{value} is not a token id (32-byte hex hash)')
+                       f'{value} is not a {what} (32-byte hex hash)')
+
+    @classmethod
+    def _assert_token(cls, value):
+        '''A token id is a 32-byte hex hash, or the empty string for NAV.'''
+        if value == '':
+            return value
+        return cls._assert_hash32(value, 'token id')
 
     async def p2pmsg_info(self):
         '''Return the daemon's p2pmsg subsystem state.'''
@@ -1983,15 +1986,15 @@ class ElectrumX(SessionBase):
 
     async def rfq_list_quotes(self, uuid, min_fill_ratio=1.0):
         '''List quotes collected for an open RFQ, best price first.'''
-        assert_hash(uuid)
+        self._assert_hash32(uuid, 'request uuid')
         self.bump_cost(0.5)
         return await self.daemon_request('listquotes', uuid, min_fill_ratio)
 
     async def rfq_accept_quote(self, uuid, quote_id, taker_half_hex):
         '''Combine the client-built taker half with a collected quote and
         broadcast the atomic swap. Returns the txid.'''
-        assert_hash(uuid)
-        assert_hash(quote_id)
+        self._assert_hash32(uuid, 'request uuid')
+        self._assert_hash32(quote_id, 'quote id')
         self.bump_cost(1.0 + len(taker_half_hex) / 10000)
         txid = await self.daemon_request(
             'acceptquote', uuid, quote_id, taker_half_hex)
@@ -2000,7 +2003,7 @@ class ElectrumX(SessionBase):
 
     async def rfq_cancel(self, uuid):
         '''Cancel an open RFQ, discarding its collected quotes.'''
-        assert_hash(uuid)
+        self._assert_hash32(uuid, 'request uuid')
         self.bump_cost(0.25)
         return await self.daemon_request('cancelrfq', uuid)
 
@@ -2041,7 +2044,7 @@ class ElectrumX(SessionBase):
         '''Send a maker quote built and signed client-side. The daemon wraps
         it, authenticates it under its session identity, encrypts it to the
         taker's reply key and broadcasts it. Returns the quote_id.'''
-        assert_hash(uuid)
+        self._assert_hash32(uuid, 'request uuid')
         self._assert_token(buy_token)
         self._assert_token(sell_token)
         fill = non_negative_integer(fill)
