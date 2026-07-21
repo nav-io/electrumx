@@ -594,21 +594,37 @@ class DeserializerTxNavio(Deserializer):
         omega = self.read_scalar()
 
     def read_range_proof(self):
+        # Navio-core bulletproofs_plus::RangeProof::Serialize writes ONLY the
+        # ProofBase (the Vs count, plus Ls/Rs when Vs is non-empty) for an
+        # empty proof: A/A_wip/B and the five scalars are all guarded by
+        # `if (Vs.Size() > 0)`.  Outputs with BLSCT keys but no range proof —
+        # NFT mints carry their amount as a transparent value — serialize an
+        # empty proof, and unconditionally reading the tail here over-read
+        # 304 bytes, garbling every field after the proof (keys, token id,
+        # predicate, and the transaction boundary itself).
         Vs = self.read_points()
         if len(Vs) > 0:
             Ls = self.read_points()
             Rs = self.read_points()
+            A = self.read_point()
+            A_wip = self.read_point()
+            B = self.read_point()
+            r_prime = self.read_scalar()
+            s_prime = self.read_scalar()
+            delta_prime = self.read_scalar()
+            alpha_hat = self.read_scalar()
+            tau_x = self.read_scalar()
         else:
             Ls = []
             Rs = []
-        A = self.read_point()
-        A_wip = self.read_point()
-        B = self.read_point()
-        r_prime = self.read_scalar()
-        s_prime = self.read_scalar()
-        delta_prime = self.read_scalar()
-        alpha_hat = self.read_scalar()
-        tau_x = self.read_scalar()
+            A = b''
+            A_wip = b''
+            B = b''
+            r_prime = b''
+            s_prime = b''
+            delta_prime = b''
+            alpha_hat = b''
+            tau_x = b''
 
         return RangeProofNavio(Vs, Ls, Rs, A, A_wip, B, r_prime, s_prime, delta_prime, alpha_hat, tau_x)
 
