@@ -28,7 +28,16 @@
 '''Transaction-related classes and functions.'''
 
 from dataclasses import dataclass
-from hashlib import blake2s
+try:
+    from hashlib import blake2s
+except ImportError:  # CPython built without the _blake2 C extension
+    import hashlib as _hashlib
+
+    def blake2s(data=b'', *, digest_size=32, **kwargs):
+        h = _hashlib.new('blake2s')
+        if data:
+            h.update(data)
+        return h
 from typing import Sequence, Optional
 
 from electrumx.lib.hash import sha256, double_sha256, hash_to_hex_str
