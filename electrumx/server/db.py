@@ -892,9 +892,12 @@ class DB:
 
                 # If adding this block would exceed max_size, stop here
                 # Leave some margin to account for JSON wrapper overhead
-                if current_size + block_size > max_size and blocks:
-                    # Return what we have so far
-                    return blocks, height
+                if (current_size + batch_size_used + block_size > max_size
+                        and (blocks or batch_blocks)):
+                    # Return what we have so far, INCLUDING the blocks already
+                    # assembled from this batch: next_height is `height`, so
+                    # dropping them would make the client silently skip them.
+                    return blocks + batch_blocks, height
 
                 batch_blocks.append(block_keys)
                 batch_size_used += block_size
