@@ -2151,6 +2151,57 @@ class ElectrumX(SessionBase):
         
         return serialized_output.hex()
 
+    # Max output hashes per blockchain.transaction.get_outputs request
+    GET_OUTPUTS_MAX_COUNT = 250
+    # Share of the normal bandwidth cost charged for get_outputs responses.
+    # A wallet catching up downloads every output it owns (a staking wallet
+    # gains one per block it stakes); at full price a long catch-up pushes
+    # the session past the hard cost limit and gets it disconnected.
+    GET_OUTPUTS_BW_COST_SHARE = 0.1
+
+    async def transaction_get_outputs(self, output_hashes):
+        '''Return the serialized outputs for a list of output hashes.
+
+        output_hashes: list of output hashes (hex), at most
+          GET_OUTPUTS_MAX_COUNT of them.
+
+        Returns a list aligned with the request: each item is the output's
+        serialized hex, or None if it is not in the database. If the
+        response would exceed max_send it is cut short; the client asks
+        again for the hashes past the end of the returned list.
+        '''
+        if not isinstance(output_hashes, list):
+            raise RPCError(BAD_REQUEST, 'output_hashes must be a list')
+        if len(output_hashes) > self.GET_OUTPUTS_MAX_COUNT:
+            raise RPCError(BAD_REQUEST, f'too many output hashes '
+                           f'(max {self.GET_OUTPUTS_MAX_COUNT})')
+        hashes = [assert_tx_hash(h) for h in output_hashes]
+        self.bump_cost(0.1 + 0.01 * len(hashes))
+
+        def read_outputs():
+            return [self.db.read_serialized_output(h) for h in hashes]
+
+        outputs = await run_in_thread(read_outputs)
+
+        # each item: its hex plus JSON quotes (or null) and a separator
+        max_size = int(self.env.max_send * 0.8)
+        result = []
+        size = 2
+        for out in outputs:
+            item = None if out is None else out.hex()
+            item_size = (4 if item is None else len(item) + 2) + 1
+            if size + item_size > max_size and result:
+                break
+            size += item_size
+            result.append(item)
+
+        # aiorpcx bills the response's bandwidth when it is sent; refund the
+        # discounted share up front (the clamp at zero can only make this
+        # charge more, never less)
+        self.bump_cost(-size * self.bw_cost_per_byte
+                       * (1 - self.GET_OUTPUTS_BW_COST_SHARE))
+        return result
+
     # Pagination limits for blockchain.block.get_range_txs_keys
     RANGE_TXS_KEYS_DEFAULT_COUNT = 2000
     RANGE_TXS_KEYS_MAX_COUNT = 20000
@@ -2291,6 +2342,7 @@ class ElectrumX(SessionBase):
             'blockchain.transaction.get_keys': self.transaction_get_keys,
             'blockchain.transaction.get_merkle': self.transaction_merkle,
             'blockchain.transaction.get_output': self.transaction_get_output,
+            'blockchain.transaction.get_outputs': self.transaction_get_outputs,
             'blockchain.transaction.id_from_pos': self.transaction_id_from_pos,
             'blockchain.dotnav.resolve_name': self.resolve_name,
             'blockchain.token.get_token': self.get_token,
