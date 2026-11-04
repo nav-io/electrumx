@@ -998,6 +998,16 @@ class SessionBase(RPCSession):
     '''
 
     MAX_CHUNK_SIZE = 2016
+    # blockchain.block.headers pricing. A new wallet downloads every header
+    # (84k on Navio mainnet, 42 full chunks), fetching 10 chunks at a time.
+    # At the stock price (count/50 plus full bandwidth, ~105 per chunk) the
+    # first batch alone passes COST_SOFT_LIMIT, the session gets throttled
+    # and the client's requests time out, so a fresh wallet never syncs.
+    # A chunk is one flat-file slice, so charge it like the other sync
+    # methods: ~10 per chunk, ~420 for the whole chain.
+    HEADERS_COST_PER_HEADER = 1 / 500
+    # Share of the normal bandwidth cost charged for headers responses.
+    HEADERS_BW_COST_SHARE = 0.1
     session_counter = itertools.count()
     log_new = False
 
@@ -1024,6 +1034,9 @@ class SessionBase(RPCSession):
         self.sv_negotiated = asyncio.Event()  # done negotiating protocol version
         self.anon_logs = self.env.anon_logs
         self.txs_sent = 0
+        # bytes of upcoming responses billed at a discounted bandwidth rate
+        # (see discount_bandwidth)
+        self._bw_discount_bytes = 0.0
         self.log_me = SessionBase.log_new
         self.session_id = None
         self.daemon_request = self.session_mgr.daemon_request
@@ -1044,6 +1057,24 @@ class SessionBase(RPCSession):
             height_changed: bool,
     ):
         pass
+
+    def discount_bandwidth(self, size, share):
+        '''Bill the next `size` bytes this session sends at `share` of the
+        normal bandwidth rate (sync methods whose responses are large).
+
+        aiorpcx bills a response's bandwidth after sending it and clamps the
+        session cost at zero, so refunding before the send loses the refund
+        on a fresh (low-cost) session. The refund is applied in
+        _send_message instead, right after the send was billed.'''
+        self._bw_discount_bytes += size * (1 - share)
+
+    async def _send_message(self, message):
+        result = await super()._send_message(message)
+        if self._bw_discount_bytes:
+            n = min(self._bw_discount_bytes, len(message))
+            self._bw_discount_bytes -= n
+            self.bump_cost(-n * self.bw_cost_per_byte)
+        return result
 
     def default_framer(self):
         return NewlineFramer(max_size=self.env.max_recv)
@@ -1685,7 +1716,7 @@ class ElectrumX(SessionBase):
         start_height = non_negative_integer(start_height)
         count = non_negative_integer(count)
         cp_height = non_negative_integer(cp_height)
-        cost = count / 50
+        cost = count * self.HEADERS_COST_PER_HEADER
 
         max_size = self.MAX_CHUNK_SIZE
         count = min(count, max_size)
@@ -1696,6 +1727,7 @@ class ElectrumX(SessionBase):
             last_height = start_height + count - 1
             result.update(await self._merkle_proof(cp_height, last_height))
         self.bump_cost(cost)
+        self.discount_bandwidth(len(result['hex']), self.HEADERS_BW_COST_SHARE)
         return result
 
     def is_tor(self):
@@ -2195,11 +2227,7 @@ class ElectrumX(SessionBase):
             size += item_size
             result.append(item)
 
-        # aiorpcx bills the response's bandwidth when it is sent; refund the
-        # discounted share up front (the clamp at zero can only make this
-        # charge more, never less)
-        self.bump_cost(-size * self.bw_cost_per_byte
-                       * (1 - self.GET_OUTPUTS_BW_COST_SHARE))
+        self.discount_bandwidth(size, self.GET_OUTPUTS_BW_COST_SHARE)
         return result
 
     # Pagination limits for blockchain.block.get_range_txs_keys
